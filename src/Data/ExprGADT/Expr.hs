@@ -61,9 +61,9 @@ data Op2 :: * -> * -> * -> * where
     And     :: Op2 Bool Bool Bool
     Or      :: Op2 Bool Bool Bool
     Tup     :: Op2 a b (a, b)
+    Cons    :: Op2 a [a] [a]
 
-data Op2' :: * -> * -> * -> * where
-    Cons    :: Op2' a [a] [a]
+data Op2' :: * -> * -> * -> *
 
 data Op3 :: * -> * -> * -> * -> *
 
@@ -83,16 +83,14 @@ forbidden :: Expr vs a -> String -> b
 forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
 eval :: Expr '[] a -> a
-eval e = case e of
-           O0 o          -> op0 o
-           O1 o e1       -> onO op1 op1' o (eval e1)
-           O2 o e1 e2    -> onO op2 op2' o (eval e1) (eval e2)
-           O3 o e1 e2 e3 -> onO op3 op3' o (eval e1) (eval e2) (eval e3)
-           V _           -> forbidden e "No variables allowed..."
-           _             -> eval $ reduce e
-  where
-    onO f _ (Con o) = f o
-    onO _ g (Dec o) = g o
+eval e = case reduce e of
+           O0 o                -> op0 o
+           O1 (Con o) e1       -> op1 o (eval e1)
+           O2 (Con o) e1 e2    -> op2 o (eval e1) (eval e2)
+           O3 (Con o) e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
+           V _           -> forbidden e "No variables possible..."
+           _             -> error $ "After reduction, there should be no Dec constructors if there are no variables. "
+                                 ++ show e ++ " " ++ show (reduce e)
 
 reduce :: Expr vs a -> Expr vs a
 reduce = reduceWith V
@@ -110,8 +108,8 @@ reduceWith f = go
                                 Dec Snd    -> reduceSnd e1
                                 Dec Uncons -> reduceUncons e1
              O2 o e1 e2    -> case o of
-                                Con _    -> O2 o (go e1) (go e2)
-                                Dec Cons -> reduceCons e1 e2
+                                Con _ -> O2 o (go e1) (go e2)
+                                Dec _ -> forbidden e "There aren't even any constructors for Op2'.  How absurd."
              O3 o e1 e2 e3 -> case o of
                                 Con _  -> forbidden e "There aren't even any constructors for Op3.  How absurd."
                                 Dec If -> reduceIf e1 e2 e3
@@ -131,16 +129,8 @@ reduceWith f = go
     reduceUncons e' = case e' of
                         V _                  -> O1 (Dec Uncons) (go e')
                         O0 Nil               -> O1 (Con Left') (O0 Unit)
-                        O2 (Dec Cons) ex exs -> O1 (Con Right') (O2 (Con Tup) (go ex) (go exs))
+                        O2 (Con Cons) ex exs -> O1 (Con Right') (O2 (Con Tup) (go ex) (go exs))
                         _                    -> reduceUncons $ reduce e'
-    reduceCons :: Expr vs a -> Expr vs [a] -> Expr us [a]
-    reduceCons ex exs = case exs of
-                          V _                  -> O2 (Dec Cons) ex' (go exs)
-                          O0 Nil               -> O2 (Dec Cons) ex' (O0 Nil)
-                          O2 (Dec Cons) ey eys -> O2 (Dec Cons) ex' (O2 (Dec Cons) (go ey) (go eys))
-                          _                    -> reduceCons ex (reduce exs)
-      where
-        ex' = go ex
     reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr us a
     reduceIf eb ex ey = case eb of
                           V _                  -> O3 (Dec If) (go eb) (go ex) (go ey)
@@ -167,7 +157,7 @@ reduceWith f = go
 foldr' :: forall a b vs. Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
 foldr' ef ez exs = case exs' of
                      O0 Nil -> ez
-                     O2 (Dec Cons) ey eys -> ef :$ O2 (Con Tup) ey (foldr' ef ez eys)
+                     O2 (Con Cons) ey eys -> ef :$ O2 (Con Tup) ey (foldr' ef ez eys)
                      -- loops forever
                      _ -> Case (O1 (Dec Uncons) exs')
                                ez'
@@ -208,10 +198,6 @@ pushDown f ix = case ix of
                   IZ     -> IZ
                   IS ix' -> IS (f ix')
 
--- coerceIndexor :: Indexor ks k -> Indexor js j
--- coerceIndexor IZ = IZ
--- coerceIndexor (IS ix) = IS (coerceIndexor ix)
-
 op0 :: Op0 a -> a
 op0 (I i) = i
 op0 (B b) = b
@@ -225,12 +211,12 @@ op1 Not    = not
 op1 Left'  = Left
 op1 Right' = Right
 
-op1' :: Op1' a b -> a -> b
-op1' Fst    = fst
-op1' Snd    = snd
-op1' Uncons = \x -> case x of
-                      []     -> Left ()
-                      (y:ys) -> Right (y, ys)
+-- op1' :: Op1' a b -> a -> b
+-- op1' Fst    = fst
+-- op1' Snd    = snd
+-- op1' Uncons = \x -> case x of
+--                       []     -> Left ()
+--                       (y:ys) -> Right (y, ys)
 
 op2 :: Op2 a b c -> a -> b -> c
 op2 Plus    = (+)
@@ -240,17 +226,18 @@ op2 LEquals = (<=)
 op2 And     = (&&)
 op2 Or      = (||)
 op2 Tup     = (,)
+op2 Cons    = (:)
 
-op2' :: Op2' a b c -> a -> b -> c
-op2' Cons = (:)
--- op2 Cons    = (:)
--- op2 Const   = const
+-- op2' :: Op2' a b c -> a -> b -> c
+-- op2' = error "No constructors of Op2'.  How absurd!"
+-- -- op2 Cons    = (:)
+-- -- op2 Const   = const
 
 op3 :: Op3 a b c d -> a -> b -> c -> d
 op3 = error "No constructors of Op3.  How absurd!"
 
-op3' :: Op3' a b c d -> a -> b -> c -> d
-op3' If b x y = if b then x else y
+-- op3' :: Op3' a b c d -> a -> b -> c -> d
+-- op3' If b x y = if b then x else y
 
 instance Num (Expr vs Int) where
     (+)         = O2 (Con Plus)
@@ -274,7 +261,7 @@ instance ToExpr () where
 
 instance ToExpr a => ToExpr [a] where
     toExpr []     = O0 Nil
-    toExpr (x:xs) = O2 (Dec Cons) (toExpr x) (toExpr xs)
+    toExpr (x:xs) = O2 (Con Cons) (toExpr x) (toExpr xs)
 
 instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
     toExpr (x, y) = O2 (Con Tup) (toExpr x) (toExpr y)
