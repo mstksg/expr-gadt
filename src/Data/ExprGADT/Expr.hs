@@ -20,13 +20,29 @@ data Indexor :: [k] -> k -> * where
     IS :: Indexor ks k -> Indexor (j ': ks) k
 
 data Expr :: [*] -> * -> * where
-    V      :: Indexor vs a                   -> Expr vs a
-    O0     :: Op0 a                          -> Expr vs a
-    O1     :: O (Op1 a b) (Op1' a b)         -> Expr vs a        -> Expr vs b
-    O2     :: O (Op2 a b c) (Op2' a b c)     -> Expr vs a        -> Expr vs b        -> Expr vs c
-    O3     :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a        -> Expr vs b        -> Expr vs c -> Expr vs d
-    (:$)   :: Expr (a ': vs) b               -> Expr vs a        -> Expr vs b
-    Case   :: Expr vs (Either a b)           -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
+    V       :: Indexor vs a                   -> Expr vs a
+    O0      :: Op0 a                          -> Expr vs a
+    O1      :: O (Op1 a b)     (Op1' a b)     -> Expr vs a        -> Expr vs b
+    O2      :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a        -> Expr vs b        -> Expr vs c
+    O3      :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a        -> Expr vs b        -> Expr vs c -> Expr vs d
+    (:$)    :: Expr (a ': vs) b               -> Expr vs a        -> Expr vs b
+    Case    :: Expr vs (Either a b)           -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
+    Unfoldr :: Expr (a ': vs) (Either () (a, b)) -> Expr vs b -> Expr vs [a]
+    Foldr   :: Expr (a ': b ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
+
+-- two roads here:
+-- 1. Foldr :: Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
+-- 2. Recurse :: Expr (a ': vs) (Either b (b, a)) -> Expr (a ': a ': vs) a -> Expr vs a -> Expr vs b
+--
+-- recurse is essentially an unfoldr with a foldr.
+-- foldr can be implemented by recursing on unconsing
+--
+-- i guess unfoldr + foldr combo is the nicest.  unfoldr can also subsume
+-- uncons
+--
+-- uncons = foldr $ \x m -> case m of
+--                            Nothing      -> Just (x, [])
+--                            Just (y, ys) -> Just (x, y:ys))
 
 infixl 1 :$
 
@@ -92,6 +108,7 @@ eval e = case reduce e of
            _             -> error $ "After reduction, there should be no Dec constructors if there are no variables. "
                                  ++ show e ++ " " ++ show (reduce e)
 
+-- reduce to only Con constructors, O0, and V
 reduce :: Expr vs a -> Expr vs a
 reduce = reduceWith V
 
@@ -100,21 +117,23 @@ reduceWith f = go
   where
     go :: Expr vs a -> Expr us a
     go e = case e of
-             V ix          -> f ix
-             O0 o          -> O0 o
-             O1 o e1       -> case o of
-                                Con _      -> O1 o (go e1)
-                                Dec Fst    -> reduceFst e1
-                                Dec Snd    -> reduceSnd e1
-                                Dec Uncons -> reduceUncons e1
-             O2 o e1 e2    -> case o of
-                                Con _ -> O2 o (go e1) (go e2)
-                                Dec _ -> forbidden e "There aren't even any constructors for Op2'.  How absurd."
-             O3 o e1 e2 e3 -> case o of
-                                Con _  -> forbidden e "There aren't even any constructors for Op3.  How absurd."
-                                Dec If -> reduceIf e1 e2 e3
-             ef :$ ex      -> reduceAp ef ex
-             Case ee el er -> reduceCase ee el er
+             V ix            -> f ix
+             O0 o            -> O0 o
+             O1 o e1         -> case o of
+                                  Con _      -> O1 o (go e1)
+                                  Dec Fst    -> reduceFst e1
+                                  Dec Snd    -> reduceSnd e1
+                                  Dec Uncons -> reduceUncons e1
+             O2 o e1 e2      -> case o of
+                                  Con _ -> O2 o (go e1) (go e2)
+                                  Dec _ -> forbidden e "There aren't even any constructors for Op2'.  How absurd."
+             O3 o e1 e2 e3   -> case o of
+                                  Con _  -> forbidden e "There aren't even any constructors for Op3.  How absurd."
+                                  Dec If -> reduceIf e1 e2 e3
+             ef :$ ex        -> reduceAp ef ex
+             Case ee el er   -> reduceCase ee el er
+             Unfoldr ef ez   -> Unfoldr (go' ef) (go ez)
+             Foldr ef ez exs -> reduceFoldr ef ez exs
     reduceFst :: Expr vs (a, b) -> Expr us a
     reduceFst e' = case e' of
                      V _               -> O1 (Dec Fst) (go e')
@@ -145,28 +164,45 @@ reduceWith f = go
         apply (IS ix) = V ix
     reduceCase :: forall a b c. Expr vs (Either a b) -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr us c
     reduceCase ee el er = case ee of
-                            V _                -> Case (go ee) (reduceWith f' el) (reduceWith f' er)
+                            V _                -> Case (go ee) (go' el) (go' er)
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
                             _                  -> reduceCase (reduce ee) el er
+    reduceFoldr :: Expr (a ': b ': vs) b -> Expr vs b -> Expr vs [a] -> Expr us b
+    reduceFoldr ef ez exs = case exs of
+                              V _    -> Foldr (go'' ef) (go ez) (go exs)
+                              O0 Nil -> go ez
+                              O2 (Con Cons) ey eys -> go $ ef :$ shuffleVars IS ey
+                                                              :$ Foldr ef ez eys
+                              _                    -> reduceFoldr ef ez (reduce exs)
+
+    go' :: forall d a. Expr (d ': vs) a -> Expr (d ': us) a
+    go' = reduceWith f'
       where
-        f' :: forall k d. Indexor (d ': vs) k  -> Expr (d ': us) k
+        f' :: forall k. Indexor (d ': vs) k  -> Expr (d ': us) k
         f' IZ      = V IZ
         f' (IS ix) = shuffleVars IS $ f ix
+    go'' :: forall d e a. Expr (d ': e ': vs) a -> Expr (d ': e ': us) a
+    go'' = reduceWith f''
+      where
+        f'' :: forall k. Indexor (d ': e ': vs) k  -> Expr (d ': e ': us) k
+        f'' IZ      = V IZ
+        f'' (IS IZ) = V (IS IZ)
+        f'' (IS (IS ix)) = shuffleVars (IS . IS) $ f ix
 
-foldr' :: forall a b vs. Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
-foldr' ef ez exs = case exs' of
-                     O0 Nil -> ez
-                     O2 (Con Cons) ey eys -> ef :$ O2 (Con Tup) ey (foldr' ef ez eys)
-                     -- loops forever
-                     _ -> Case (O1 (Dec Uncons) exs')
-                               ez'
-                               (ef' :$ O2 (Con Tup) (O1 (Dec Fst) (V IZ)) (foldr' ef' ez' (O1 (Dec Snd) (V IZ))))
-  where
-    exs' = reduce exs
-    ef' = shuffleVars (pushDown IS) (reduce ef)
-    ez' :: forall j. Expr (j ': vs) b
-    ez' = shuffleVars IS (reduce ez)
+-- foldr' :: forall a b vs. Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
+-- foldr' ef ez exs = case exs' of
+--                      O0 Nil -> ez
+--                      O2 (Con Cons) ey eys -> ef :$ O2 (Con Tup) ey (foldr' ef ez eys)
+--                      -- loops forever
+--                      _ -> Case (O1 (Dec Uncons) exs')
+--                                ez'
+--                                (ef' :$ O2 (Con Tup) (O1 (Dec Fst) (V IZ)) (foldr' ef' ez' (O1 (Dec Snd) (V IZ))))
+--   where
+--     exs' = reduce exs
+--     ef' = shuffleVars (pushDown IS) (reduce ef)
+--     ez' :: forall j. Expr (j ': vs) b
+--     ez' = shuffleVars IS (reduce ez)
 
 -- foldr' ef ez exs = Case (O1 (Dec Uncons) exs)
 --                         ez'
@@ -295,6 +331,7 @@ instance Show (Expr vs a) where
                                      . showsPrec 11 e2
                                      . showString " "
                                      . showsPrec 11 e3
+                      -- should only parentheses when p > 1 i guess but oh well
                       ef :$ ex -> showsPrec (p + 1) ef
                                 . showString " :$ "
                                 . showsPrec p ex
@@ -304,3 +341,13 @@ instance Show (Expr vs a) where
                                      . showsPrec 11 el
                                      . showString " "
                                      . showsPrec 11 er
+                      Unfoldr ef ez -> showString "Unfoldr "
+                                     . showsPrec 11 ef
+                                     . showString " "
+                                     . showsPrec 11 ez
+                      Foldr ef ez exs -> showString "Foldr "
+                                       . showsPrec 11 ef
+                                       . showString " "
+                                       . showsPrec 11 ez
+                                       . showString " "
+                                       . showsPrec 11 exs
