@@ -10,6 +10,7 @@
 
 module Data.ExprGADT.Expr where
 
+-- import Debug.Trace
 -- import Control.Arrow ((|||))
 -- import Data.List (uncons)
 -- import Data.Void
@@ -19,20 +20,20 @@ data Indexor :: [k] -> k -> * where
     IS :: Indexor ks k -> Indexor (j ': ks) k
 
 data Expr :: [*] -> * -> * where
-    V      :: Indexor vs a                    -> Expr vs a
-    O0     :: Op0 a                           -> Expr vs a
-    O1     :: O (Op1 a b) (Op1' a b)     -> Expr vs a        -> Expr vs b
-    O2     :: O (Op2 a b c) (Op2' a b c) -> Expr vs a        -> Expr vs b        -> Expr vs c
-    O3     :: O (Op3 a b c d) (Op3' a b c d)                    -> Expr vs a        -> Expr vs b        -> Expr vs c -> Expr vs d
-    (:$)   :: Expr (a ': vs) b                -> Expr vs a        -> Expr vs b
-    Case   :: Expr vs (Either a b)            -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
-    -- Const  :: Expr vs a -> Expr (v ': vs) a
+    V      :: Indexor vs a                   -> Expr vs a
+    O0     :: Op0 a                          -> Expr vs a
+    O1     :: O (Op1 a b) (Op1' a b)         -> Expr vs a        -> Expr vs b
+    O2     :: O (Op2 a b c) (Op2' a b c)     -> Expr vs a        -> Expr vs b        -> Expr vs c
+    O3     :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a        -> Expr vs b        -> Expr vs c -> Expr vs d
+    (:$)   :: Expr (a ': vs) b               -> Expr vs a        -> Expr vs b
+    Case   :: Expr vs (Either a b)           -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
 
 infixl 1 :$
 
 data O :: * -> * -> * where
     Con :: a -> O a b
     Dec :: b -> O a b
+  deriving Show
 
 data Op0 :: * -> * where
     I :: Int -> Op0 Int
@@ -63,7 +64,6 @@ data Op2 :: * -> * -> * -> * where
 
 data Op2' :: * -> * -> * -> * where
     Cons    :: Op2' a [a] [a]
-    -- Const   :: Op2 a b a
 
 data Op3 :: * -> * -> * -> * -> *
 
@@ -71,14 +71,16 @@ data Op3' :: * -> * -> * -> * -> * where
     If :: Op3' Bool a a a
 
 deriving instance Show (Indexor ks k)
+deriving instance Show (Op0 a)
 deriving instance Show (Op1 a b)
 deriving instance Show (Op1' a b)
 deriving instance Show (Op2 a b c)
 deriving instance Show (Op2' a b c)
+deriving instance Show (Op3 a b c d)
 deriving instance Show (Op3' a b c d)
 
 forbidden :: Expr vs a -> String -> b
-forbidden _ r = error $ "Impossible branch prevented by type system! " ++ r
+forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
 eval :: Expr '[] a -> a
 eval e = case e of
@@ -117,19 +119,23 @@ reduceWith f = go
              Case ee el er -> reduceCase ee el er
     reduceFst :: Expr vs (a, b) -> Expr us a
     reduceFst e' = case e' of
+                     V _               -> O1 (Dec Fst) (go e')
                      O2 (Con Tup) e1 _ -> go e1
                      _                 -> reduceFst $ reduce e'
     reduceSnd :: Expr vs (a, b) -> Expr us b
     reduceSnd e' = case e' of
+                     V _               -> O1 (Dec Snd) (go e')
                      O2 (Con Tup) _ e2 -> go e2
                      _                 -> reduceSnd $ reduce e'
     reduceUncons :: Expr vs [a] -> Expr us (Either () (a, [a]))
     reduceUncons e' = case e' of
+                        V _                  -> O1 (Dec Uncons) (go e')
                         O0 Nil               -> O1 (Con Left') (O0 Unit)
                         O2 (Dec Cons) ex exs -> O1 (Con Right') (O2 (Con Tup) (go ex) (go exs))
                         _                    -> reduceUncons $ reduce e'
     reduceCons :: Expr vs a -> Expr vs [a] -> Expr us [a]
     reduceCons ex exs = case exs of
+                          V _                  -> O2 (Dec Cons) ex' (go exs)
                           O0 Nil               -> O2 (Dec Cons) ex' (O0 Nil)
                           O2 (Dec Cons) ey eys -> O2 (Dec Cons) ex' (O2 (Dec Cons) (go ey) (go eys))
                           _                    -> reduceCons ex (reduce exs)
@@ -137,6 +143,7 @@ reduceWith f = go
         ex' = go ex
     reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr us a
     reduceIf eb ex ey = case eb of
+                          V _                  -> O3 (Dec If) (go eb) (go ex) (go ey)
                           O0 (B b) | b         -> go ex
                                    | otherwise -> go ey
                           _                    -> reduceIf (reduce eb) ex ey
@@ -146,92 +153,35 @@ reduceWith f = go
         apply :: forall k. Indexor (a ': vs) k -> Expr vs k
         apply IZ      = ex
         apply (IS ix) = V ix
-    reduceCase :: Expr vs (Either a b) -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr us c
+    reduceCase :: forall a b c. Expr vs (Either a b) -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr us c
     reduceCase ee el er = case ee of
+                            V _                -> Case (go ee) (reduceWith f' el) (reduceWith f' er)
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
                             _                  -> reduceCase (reduce ee) el er
--- eval :: Expr '[] a -> a
--- eval e = case e of
---            V _           -> forbidden e "No V constructors possible with Expr '[] a"
---            O0 o          -> op0 o
---            O1 o e1       -> op1 o (eval e1)
---            O2 o e1 e2    -> op2 o (eval e1) (eval e2)
---            O3 o e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
---            e1 :$ e2      -> eval $ reduceWith e2 e1
---            Case ee el er -> eval $ reduceCase ee el er
---              -- case ee of
---              --   O1 Left'  ex  -> reduceWith ex el
---              --   O1 Right' ex  -> reduceWith ex er
---              --   O1 Uncons exs ->
---              --     case exs of
---              --       O0 Nil         -> el :$ O0 Unit
---              --       O2 Cons ey eys -> er :$ O2 Tup ey eys
---              --       Case (O1 Uncons xs) el er -> undefined
---              --       -- need to handle case of Uncons
---              --       -- O1 Uncons xs   -> error "hey"
---              --       _              -> forbidden e "Only constructors of [] should be O0 Nil and O2 Cons"
---              --   _            -> forbidden e "Only constructors of Either should be Left', Right', Uncons'"
+      where
+        f' :: forall k d. Indexor (d ': vs) k  -> Expr (d ': us) k
+        f' IZ      = V IZ
+        f' (IS ix) = shuffleVars IS $ f ix
 
--- reduceCase :: Expr vs (Either a b) -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
--- reduceCase ee el er = case ee of
---                         O1 Left'  ex  -> reduceWith ex el
---                         O1 Right' ex  -> reduceWith ex er
---                         O1 Uncons exs -> reduceList exs (el :$ O0 Unit) er
+foldr' :: forall a b vs. Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
+foldr' ef ez exs = case exs' of
+                     O0 Nil -> ez
+                     O2 (Dec Cons) ey eys -> ef :$ O2 (Con Tup) ey (foldr' ef ez eys)
+                     -- loops forever
+                     _ -> Case (O1 (Dec Uncons) exs')
+                               ez'
+                               (ef' :$ O2 (Con Tup) (O1 (Dec Fst) (V IZ)) (foldr' ef' ez' (O1 (Dec Snd) (V IZ))))
+  where
+    exs' = reduce exs
+    ef' = shuffleVars (pushDown IS) (reduce ef)
+    ez' :: forall j. Expr (j ': vs) b
+    ez' = shuffleVars IS (reduce ez)
 
--- reduceList :: Expr vs [a] -> Expr vs b -> Expr ((a, [a]) ': vs) b -> Expr vs b
--- reduceList exs enil econs = case exs of
---                               O0 Nil -> enil
---                               O2 Cons ey eys -> econs :$ O2 Tup ey eys
---                               Case ee el er  -> reduceList (reduceCase ee el er) enil econs
---                               V ix -> error "var"
---                               O1 Snd e1 -> reduceList (reduceSnd e1) enil econs
---                               -- O1 o e1 -> O1 o e1
---                               O2 _ _ _ -> error "O2"
---                               O3 _ _ _ _ -> error "O3"
---                               _ :$ _ -> error ":$"
---                               _ -> error "hey what gives"
-
--- reduceSnd :: Expr vs (a, b) -> Expr vs b
--- reduceSnd e = case e of
---                 O2 Tup _ e2 -> e2
---                 _ -> error "yo"
-
-
--- reduceWith :: Expr vs v -> Expr (v ': vs) a -> Expr vs a
--- reduceWith ev e = case e of
---                     V IZ          -> ev
---                     V (IS v)      -> V v
---                     O0 o          -> O0 o
---                     O1 o e1       -> O1 o (reduceWith ev e1)
---                     O2 o e1 e2    -> O2 o (reduceWith ev e1) (reduceWith ev e2)
---                     O3 o e1 e2 e3 -> O3 o (reduceWith ev e1) (reduceWith ev e2) (reduceWith ev e3)
---                     ef :$ ex      -> reduceWith ev (reduceWith ex ef)
---                     Case ee el er -> reduceWith ev (reduceCase ee el er)
---                       -- case ee of
---                       --   O1 Left' ex   -> el :$ ex
---                       --   O1 Right' ex  -> er :$ ex
---                       --   O1 Uncons exs ->
---                       --     case exs of
---                       --       O0 Nil         -> el :$ O0 Unit
---                       --       O2 Cons ey eys -> er :$ O2 Tup ey eys
---                       --       _              -> forbidden e "Only constructors of [] should be O0 Nil and O2 Cons"
---                       --   _            -> forbidden e "Only constructors of Either should be Left', Right', Uncons'"
---                     -- -- Const e1      -> e1
-
--- foldr' :: forall a b vs. Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
--- -- foldr' ef ez exs = case exs of
--- --                      O0 Nil         -> ez
--- --                      O2 Cons ey eys -> ef :$ O2 Tup ey (foldr' ef ez eys)
--- --                      _              -> forbidden exs "Only constructors of [] should be O0 Nil and O2 Cons"
--- -- foldr' ef ez exs = Case (O1 Uncons exs) (_ ez) (_ ef :$ O2 Tup (O1 Fst (V IZ)) undefined)
--- -- -- foldr' ef ez exs = Case (O1 Uncons exs) (Const ez) (undefined ef :$ O2 Tup (O1 Fst (V IZ)) (Const ez))
--- -- -- foldr' ef ez exs = Case (O1 Uncons exs) (Const ez) (undefined ef :$ O2 Tup (O1 Fst (V IZ)) ())
--- -- -- foldr_ f z (x:xs) = f x (foldr_ f z xs)
--- foldr' ef ez exs = Case (O1 Uncons exs)
+-- foldr' ef ez exs = Case (O1 (Dec Uncons) exs)
 --                         ez'
---                         -- (shuffleVars (pushDown IS) ef :$ O2 Tup (O1 Fst (V IZ)) (shuffleVars IS ez))
---                         (ef' :$ O2 Tup (O1 Fst (V IZ)) (foldr' ef' ez' (O1 Snd (V IZ))))
+--                         (ef' :$ O2 (Con Tup) (O1 (Dec Fst) (V IZ)) (foldr' ef' ez' (O1 (Dec Snd) (V IZ))))
+--                         -- (ef' :$ O2 (Con Tup) (O1 (Dec Fst) (V IZ)) ez')
 --   where
 --     ef' = shuffleVars (pushDown IS) ef
 --     ez' :: forall j. Expr (j ': vs) b
@@ -240,35 +190,27 @@ reduceWith f = go
 -- sum' :: Expr vs [Int] -> Expr vs Int
 -- sum' = foldr' (O2 Plus (O1 Fst (V IZ)) (O1 Snd (V IZ))) (O0 (I 0))
 
--- curry' :: Expr ((a, b) ': vs) c -> Expr (a ': b ': vs) c
--- curry' ef = shuffleVars f ef :$ O2 Tup (V IZ) (V (IS IZ))
---   where
---     f = pushDown (IS . IS)
+curry' :: Expr ((a, b) ': vs) c -> Expr (a ': b ': vs) c
+curry' ef = shuffleVars f ef :$ O2 (Con Tup) (V IZ) (V (IS IZ))
+  where
+    f = pushDown (IS . IS)
 
--- uncurry' :: Expr (a ': b ': vs) c -> Expr ((a, b) ': vs) c
--- uncurry' ef = shuffleVars f ef :$ O1 Fst (V (IS IZ)) :$ O1 Snd (V IZ)
---   where
---     f = pushDown (pushDown IS)
+uncurry' :: Expr (a ': b ': vs) c -> Expr ((a, b) ': vs) c
+uncurry' ef = shuffleVars f ef :$ O1 (Dec Fst) (V (IS IZ)) :$ O1 (Dec Snd) (V IZ)
+  where
+    f = pushDown (pushDown IS)
 
--- shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
--- shuffleVars f = go
---   where
---     go :: forall d. Expr ks d -> Expr js d
---     go e = case e of
---              V ix          -> V (f ix)
---              O0 o          -> O0 o
---              O1 o e1       -> O1 o (go e1)
---              O2 o e1 e2    -> O2 o (go e1) (go e2)
---              O3 o e1 e2 e3 -> O3 o (go e1) (go e2) (go e3)
---              ef :$ ex      -> go' ef :$ go ex
---              Case ee el er -> Case (go ee) (go' el) (go' er)
---     go' :: forall a d. Expr (a ': ks) d -> Expr (a ': js) d
---     go' = shuffleVars (pushDown f)
+shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
+shuffleVars f = reduceWith (V . f)
 
 pushDown :: (Indexor ks k -> Indexor js k) -> Indexor (a ': ks) k -> Indexor (a ': js) k
 pushDown f ix = case ix of
                   IZ     -> IZ
                   IS ix' -> IS (f ix')
+
+-- coerceIndexor :: Indexor ks k -> Indexor js j
+-- coerceIndexor IZ = IZ
+-- coerceIndexor (IS ix) = IS (coerceIndexor ix)
 
 op0 :: Op0 a -> a
 op0 (I i) = i
@@ -340,3 +282,38 @@ instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
 instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
     toExpr (Left x)  = O1 (Con Left') (toExpr x)
     toExpr (Right x) = O1 (Con Right') (toExpr x)
+
+instance Show (Expr vs a) where
+    showsPrec p e = showParen (p > 10) $ case e of
+                      V IZ -> showString "V IZ"
+                      V ix -> showString "V "
+                            . showParen True (shows ix)
+                      O0 o -> showString "O0 "
+                            . showsPrec 11 o
+                      O1 o e1 -> showString "O1 "
+                               . showsPrec 11 o
+                               . showString " "
+                               . showsPrec 11 e1
+                      O2 o e1 e2 -> showString "O2 "
+                                  . showsPrec 11 o
+                                  . showString " "
+                                  . showsPrec 11 e1
+                                  . showString " "
+                                  . showsPrec 11 e2
+                      O3 o e1 e2 e3 -> showString "O3 "
+                                     . showsPrec 11 o
+                                     . showString " "
+                                     . showsPrec 11 e1
+                                     . showString " "
+                                     . showsPrec 11 e2
+                                     . showString " "
+                                     . showsPrec 11 e3
+                      ef :$ ex -> showsPrec (p + 1) ef
+                                . showString " :$ "
+                                . showsPrec p ex
+                      Case ee el er -> showString "Case "
+                                     . showsPrec 11 ee
+                                     . showString " "
+                                     . showsPrec 11 el
+                                     . showString " "
+                                     . showsPrec 11 er
