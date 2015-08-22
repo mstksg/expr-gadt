@@ -17,14 +17,14 @@ data Indexor :: [k] -> k -> * where
 data Expr :: [*] -> * -> * where
     V        :: Indexor vs a                   -> Expr vs a
     O0       :: Op0 a                          -> Expr vs a
-    O1       :: O (Op1 a b)     (Op1' a b)     -> Expr vs a        -> Expr vs b
-    O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a        -> Expr vs b        -> Expr vs c
-    O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a        -> Expr vs b        -> Expr vs c -> Expr vs d
-    Lambda   :: Expr (a ': vs) b -> Expr vs (a -> b)
-    (:$)     :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
-    Case     :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
-    UnfoldrN :: Expr vs Int -> Expr vs (a -> (a, b)) -> Expr vs a -> Expr vs [b]
-    Foldr    :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
+    O1       :: O (Op1 a b)     (Op1' a b)     -> Expr vs a             -> Expr vs b
+    O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a             -> Expr vs b        -> Expr vs c
+    O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a             -> Expr vs b        -> Expr vs c   -> Expr vs d
+    Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
+    (:$)     :: Expr vs (a -> b)               -> Expr vs a             -> Expr vs b
+    Case     :: Expr vs (Either a b)           -> Expr vs (a -> c)      -> Expr vs (b -> c) -> Expr vs c
+    UnfoldrN :: Expr vs Int                    -> Expr vs (a -> (a, b)) -> Expr vs a        -> Expr vs [b]
+    Foldr    :: Expr vs (a -> b -> b)          -> Expr vs b             -> Expr vs [a]      -> Expr vs b
 
 infixl 1 :$
 
@@ -89,19 +89,31 @@ deriving instance Eq (Op3' a b c d)
 forbidden :: Expr vs a -> String -> b
 forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
+-- eval :: Expr vs a -> a
 eval :: Expr '[] a -> a
 eval e = case reduceAll e of
            O0 o                -> op0 o
            O1 (Con o) e1       -> op1 o (eval e1)
            O2 (Con o) e1 e2    -> op2 o (eval e1) (eval e2)
            O3 (Con o) e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
-           -- Lambda ef           -> \x -> undefined   -- is there a way to do this?
+           Lambda ef           -> error $ show ef
+           -- Lambda ef           -> \x -> undefined   -- is there a nice way to do this?
            V _           -> forbidden e "No variables possible..."
                             -- after reduction, there should be no Dec
                             -- constructors if there are no variables.
            _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
                                             , show e
                                             ]
+
+evalWith :: v -> Expr (v ': '[]) a -> a
+evalWith v e = case e of
+                 V IZ -> v
+                 _    -> eval $ shuffleVars killIz e
+  where
+    killIz :: Indexor (k ': ks) j -> Indexor ks j
+    killIz IZ      = error "killed!"
+    killIZ (IS ix) = ix
+
 
 -- reduce to only Con constructors, O0, and V...ideally.
 reduceAll :: Expr vs a -> Expr vs a
