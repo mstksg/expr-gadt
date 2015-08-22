@@ -10,11 +10,6 @@
 
 module Data.ExprGADT.Expr where
 
-import Debug.Trace
--- import Control.Arrow ((|||))
--- import Data.List (uncons)
--- import Data.Void
-
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
     IS :: Indexor ks k -> Indexor (j ': ks) k
@@ -29,20 +24,6 @@ data Expr :: [*] -> * -> * where
     Case     :: Expr vs (Either a b)           -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr vs c
     UnfoldrN :: Expr vs Int -> Expr (a ': vs) (a, b) -> Expr vs a -> Expr vs [b]
     Foldr    :: Expr (a ': b ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
-
--- two roads here:
--- 1. Foldr :: Expr ((a, b) ': vs) b -> Expr vs b -> Expr vs [a] -> Expr vs b
--- 2. Recurse :: Expr (a ': vs) (Either b (b, a)) -> Expr (a ': a ': vs) a -> Expr vs a -> Expr vs b
---
--- recurse is essentially an unfoldr with a foldr.
--- foldr can be implemented by recursing on unconsing
---
--- i guess unfoldr + foldr combo is the nicest.  unfoldr can also subsume
--- uncons
---
--- uncons = foldr $ \x m -> case m of
---                            Nothing      -> Just (x, [])
---                            Just (y, ys) -> Just (x, y:ys))
 
 infixl 1 :$
 
@@ -67,7 +48,6 @@ data Op1 :: * -> * -> * where
 data Op1' :: * -> * -> * where
     Fst    :: Op1' (a, b) a
     Snd    :: Op1' (a, b) b
-    -- Uncons :: Op1' [a] (Either () (a, [a]))
 
 data Op2 :: * -> * -> * -> * where
     Plus    :: Op2 Int Int Int
@@ -96,21 +76,38 @@ deriving instance Show (Op2 a b c)
 deriving instance Show (Op2' a b c)
 deriving instance Show (Op3 a b c d)
 deriving instance Show (Op3' a b c d)
+deriving instance Eq (Indexor ks k)
+deriving instance Eq (Op0 a)
+deriving instance Eq (Op1 a b)
+deriving instance Eq (Op1' a b)
+deriving instance Eq (Op2 a b c)
+deriving instance Eq (Op2' a b c)
+deriving instance Eq (Op3 a b c d)
+deriving instance Eq (Op3' a b c d)
 
 forbidden :: Expr vs a -> String -> b
 forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
 eval :: Expr '[] a -> a
-eval e = case reduce e of
+eval e = case reduceAll e of
            O0 o                -> op0 o
            O1 (Con o) e1       -> op1 o (eval e1)
            O2 (Con o) e1 e2    -> op2 o (eval e1) (eval e2)
            O3 (Con o) e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
            V _           -> forbidden e "No variables possible..."
-           _             -> error $ "After reduction, there should be no Dec constructors if there are no variables. "
-                                 ++ show e ++ " " ++ show (reduce e)
+                            -- after reduction, there should be no Dec
+                            -- constructors if there are no variables.
+           _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
+                                            , show e
+                                            ]
 
--- reduce to only Con constructors, O0, and V
+-- reduce to only Con constructors, O0, and V...ideally.
+reduceAll :: Expr vs a -> Expr vs a
+reduceAll e | e == e'   = e'
+            | otherwise = reduceAll e'
+  where
+    e' = reduceWith V e
+
 reduce :: Expr vs a -> Expr vs a
 reduce = reduceWith V
 
@@ -118,16 +115,23 @@ reduceWith :: forall vs us o. (forall v. Indexor vs v -> Expr us v) -> Expr vs o
 reduceWith f = go
   where
     go :: Expr vs a -> Expr us a
-    go e = trace ("go " ++ show e) $ case e of
+    go e = case e of
              V ix              -> f ix
              O0 o              -> O0 o
              O1 o e1           -> case o of
-                                    Con _      -> O1 o (go e1)
+                                    Con o'     -> case e1 of
+                                                    O0 o'' -> case op1_ o' (op0 o'') of
+                                                                Just x -> O0 x
+                                                                _      -> O1 o (go e1)
+                                                    _      -> O1 o (go e1)
                                     Dec Fst    -> reduceFst e1
                                     Dec Snd    -> reduceSnd e1
-                                    -- Dec Uncons -> reduceUncons e1
              O2 o e1 e2        -> case o of
-                                    Con _ -> O2 o (go e1) (go e2)
+                                    Con o' -> case (e1, e2) of
+                                                (O0 o''1, O0 o''2) -> case op2_ o' (op0 o''1) (op0 o''2) of
+                                                                        Just x -> O0 x
+                                                                        _      -> O2 o (go e1) (go e2)
+                                                _           -> O2 o (go e1) (go e2)
                                     Dec _ -> forbidden e "There aren't even any constructors for Op2'.  How absurd."
              O3 o e1 e2 e3     -> case o of
                                     Con _  -> forbidden e "There aren't even any constructors for Op3.  How absurd."
@@ -138,38 +142,33 @@ reduceWith f = go
              Foldr ef ez exs   -> reduceFoldr ef ez exs
     reduceFst :: Expr vs (a, b) -> Expr us a
     reduceFst e' = case e' of
-                     V _               -> O1 (Dec Fst) (go e')
                      O2 (Con Tup) e1 _ -> go e1
-                     _                 -> reduceFst $ reduce e'
+                     _                 -> O1 (Dec Fst) (go e')
     reduceSnd :: Expr vs (a, b) -> Expr us b
     reduceSnd e' = case e' of
-                     V _               -> O1 (Dec Snd) (go e')
                      O2 (Con Tup) _ e2 -> go e2
-                     _                 -> reduceSnd $ reduce e'
+                     _                 -> O1 (Dec Snd) (go e')
     reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr us a
     reduceIf eb ex ey = case eb of
-                          V _                  -> O3 (Dec If) (go eb) (go ex) (go ey)
                           O0 (B b) | b         -> go ex
                                    | otherwise -> go ey
-                          _                    -> reduceIf (reduce eb) ex ey
+                          _                    -> O3 (Dec If) (go eb) (go ex) (go ey)
     reduceAp :: forall a b. Expr (a ': vs) b -> Expr vs a -> Expr us b
-    reduceAp ef ex = trace ("ap " ++ show ef ++ " " ++ show ex) $ go $ reduceWith apply ef
+    reduceAp ef ex = go $ reduceWith apply ef
       where
         apply :: forall k. Indexor (a ': vs) k -> Expr vs k
         apply IZ      = ex
         apply (IS ix) = V ix
     reduceCase :: forall a b c. Expr vs (Either a b) -> Expr (a ': vs) c -> Expr (b ': vs) c -> Expr us c
     reduceCase ee el er = case ee of
-                            V _                -> Case (go ee) (go' el) (go' er)
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
-                            _                  -> reduceCase (reduce ee) el er
+                            _                  -> Case (go ee) (go' el) (go' er)
     reduceUnfoldrN :: Expr vs Int -> Expr (a ': vs) (a, b) -> Expr vs a -> Expr us [b]
-    reduceUnfoldrN en ef ez = case en of
-                                V _                  -> UnfoldrN (go en) (go' ef) (go ez)
+    reduceUnfoldrN en ef ez = case reduce en of
                                 O0 (I i) | i <= 0    -> O0 Nil
                                          | otherwise -> go (unfold i)
-                                _                    -> reduceUnfoldrN (reduce en) ef ez
+                                _                    -> UnfoldrN (go en) (go' ef) (go ez)
       where
         unfold i = O2 (Con Cons) (O1 (Dec Snd) (V IZ))
                                  (UnfoldrN (O0 (I (i - 1)))
@@ -178,15 +177,11 @@ reduceWith f = go
                                  )
                 :$ (ef :$ ez)
     reduceFoldr :: Expr (a ': b ': vs) b -> Expr vs b -> Expr vs [a] -> Expr us b
-    reduceFoldr ef ez exs = trace "yo" $ case exs of
-                              V _    -> Foldr (go'' ef) (go ez) (go exs)
-                              O0 Nil -> go ez
-                              -- O2 (Con Cons) ey eys -> go $ ef :$ shuffleVars IS ey
-                              --                                 :$ Foldr ef ez eys
-                              O2 (Con Cons) ey eys -> trace "ey" go $ ef :$ shuffleVars IS ey
-                                                                         :$ Foldr ef ez eys
-                              UnfoldrN _ _ _ -> error "hey"
-                              _                    -> reduceFoldr ef ez (reduce exs)
+    reduceFoldr ef ez exs = case reduce exs of
+                              O0 Nil               -> go ez
+                              O2 (Con Cons) ey eys -> go $ ef :$ shuffleVars IS ey
+                                                              :$ Foldr ef ez eys
+                              _                    -> Foldr (go'' ef) (go ez) (go exs)
 
     go' :: forall d a. Expr (d ': vs) a -> Expr (d ': us) a
     go' = reduceWith f'
@@ -272,12 +267,15 @@ op1 Not    = not
 op1 Left'  = Left
 op1 Right' = Right
 
--- op1' :: Op1' a b -> a -> b
--- op1' Fst    = fst
--- op1' Snd    = snd
--- op1' Uncons = \x -> case x of
---                       []     -> Left ()
---                       (y:ys) -> Right (y, ys)
+op1_ :: Op1 a b -> a -> Maybe (Op0 b)
+op1_ o = modder . op1 o
+  where
+    modder = case o of
+               Abs    -> Just . I
+               Signum -> Just . I
+               Not    -> Just . B
+               Left'  -> const Nothing
+               Right' -> const Nothing
 
 op2 :: Op2 a b c -> a -> b -> c
 op2 Plus    = (+)
@@ -290,6 +288,21 @@ op2 And     = (&&)
 op2 Or      = (||)
 op2 Tup     = (,)
 op2 Cons    = (:)
+
+op2_ :: Op2 a b c -> a -> b -> Maybe (Op0 c)
+op2_ o x y = modder (op2 o x y)
+  where
+    modder = case o of
+               Plus    -> Just . I
+               Times   -> Just . I
+               Minus   -> Just . I
+               Div     -> Just . I
+               Mod     -> Just . I
+               LEquals -> Just . B
+               And     -> Just . B
+               Or      -> Just . B
+               Tup     -> const Nothing
+               Cons    -> const Nothing
 
 -- op2' :: Op2' a b c -> a -> b -> c
 -- op2' = error "No constructors of Op2'.  How absurd!"
@@ -333,11 +346,66 @@ instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
     toExpr (Left x)  = O1 (Con Left') (toExpr x)
     toExpr (Right x) = O1 (Con Right') (toExpr x)
 
+exprEq :: Expr vs a -> Expr us b -> Bool
+exprEq (V IZ) (V IZ) = True
+exprEq (V (IS ix1)) (V (IS ix2)) = exprEq (V ix1) (V ix2)
+exprEq (O0 o1) (O0 o2) = op0Eq o1 o2
+exprEq (O1 (Con o1) e1) (O1 (Con o2) e2) = op1Eq o1 o2 && exprEq e1 e2
+exprEq (O1 (Dec o1) e1) (O1 (Dec o2) e2) = op1'Eq o1 o2 && exprEq e1 e2
+exprEq (O2 (Con o1) e1 e1') (O2 (Con o2) e2 e2') = op2Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
+exprEq (O2 (Dec _) e1 e1') (O2 (Dec _) e2 e2') = exprEq e1 e2 && exprEq e1' e2'
+exprEq (O3 (Con _) e1 e1' e1'') (O3 (Con _) e2 e2' e2'') = exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
+exprEq (O3 (Dec o1) e1 e1' e1'') (O3 (Dec o2) e2 e2' e2'') = op3'Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
+exprEq (f1 :$ x1) (f2 :$ x2) = exprEq f1 f2 && exprEq x1 x2
+exprEq (Case e1 l1 r1) (Case e2 l2 r2) = exprEq e1 e2 && exprEq l1 l2 && exprEq r1 r2
+exprEq (UnfoldrN n1 f1 z1) (UnfoldrN n2 f2 z2) = exprEq n1 n2 && exprEq f1 f2 && exprEq z1 z2
+exprEq (Foldr f1 z1 xs1) (Foldr f2 z2 xs2) = exprEq f1 f2 && exprEq z1 z2 && exprEq xs1 xs2
+exprEq _ _ = False
+
+op0Eq :: Op0 a -> Op0 b -> Bool
+op0Eq (I i1) (I i2) = i1 == i2
+op0Eq (B b1) (B b2) = b1 == b2
+op0Eq Nil    Nil    = True
+op0Eq Unit   Unit   = True
+op0Eq _      _      = False
+
+op1Eq :: Op1 a b -> Op1 c d -> Bool
+op1Eq Abs Abs = True
+op1Eq Signum Signum = True
+op1Eq Not Not = True
+op1Eq Left' Left' = True
+op1Eq Right' Right' = True
+op1Eq _ _ = False
+
+op1'Eq :: Op1' a b -> Op1' c d -> Bool
+op1'Eq Fst Fst = True
+op1'Eq Snd Snd = True
+op1'Eq _ _ = False
+
+op2Eq :: Op2 a b c -> Op2 d e f -> Bool
+op2Eq Plus Plus = True
+op2Eq Times Times = True
+op2Eq Minus Minus = True
+op2Eq Div Div = True
+op2Eq Mod Mod = True
+op2Eq LEquals LEquals = True
+op2Eq And And = True
+op2Eq Or Or = True
+op2Eq Tup Tup = True
+op2Eq Cons Cons = True
+op2Eq _ _ = False
+
+op3'Eq :: Op3' a b c d -> Op3' e f g h -> Bool
+op3'Eq If If = True
+-- op3'Eq _ _ = False
+
+instance Eq (Expr vs a) where
+    (==) = exprEq
+
 instance Show (Expr vs a) where
     showsPrec p e = showParen (p > 10) $ case e of
-                      V IZ -> showString "V IZ"
                       V ix -> showString "V "
-                            . showParen True (shows ix)
+                            . showsPrec 11 ix
                       O0 o -> showString "O0 "
                             . showsPrec 11 o
                       O1 o e1 -> showString "O1 "
