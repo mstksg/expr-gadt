@@ -96,23 +96,28 @@ eval e = case reduceAll e of
            O1 (Con o) e1       -> op1 o (eval e1)
            O2 (Con o) e1 e2    -> op2 o (eval e1) (eval e2)
            O3 (Con o) e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
-           Lambda ef           -> error $ show ef
-           -- Lambda ef           -> \x -> undefined   -- is there a nice way to do this?
+           Lambda ef           -> \x -> evalWith (sub x) ef
            V _           -> forbidden e "No variables possible..."
                             -- after reduction, there should be no Dec
                             -- constructors if there are no variables.
            _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
                                             , show e
                                             ]
-
-evalWith :: v -> Expr (v ': '[]) a -> a
-evalWith v e = case e of
-                 V IZ -> v
-                 _    -> eval $ shuffleVars killIz e
   where
-    killIz :: Indexor (k ': ks) j -> Indexor ks j
-    killIz IZ      = error "killed!"
-    killIZ (IS ix) = ix
+    sub :: a -> Indexor (a ': '[]) v -> v
+    sub x IZ     = x
+    sub _ (IS _) = error "Impossible!!!"
+
+evalWith :: (forall v. Indexor vs v -> v) -> Expr vs a -> a
+evalWith f e = case e of
+                 V ix -> f ix
+                 Lambda ef -> undefined     -- next challenge!
+                 _    -> error $ show e
+  where
+    -- this is wrong
+    sub :: a -> Indexor (a ': vs) v -> v
+    sub x IZ = x
+    sub _ (IS _) = error "Actually very possible"
 
 
 -- reduce to only Con constructors, O0, and V...ideally.
