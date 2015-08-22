@@ -3,6 +3,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
@@ -88,7 +89,11 @@ deriving instance Eq (Op3' a b c d)
 forbidden :: Expr vs a -> String -> b
 forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
-eval :: Expr '[] a -> a
+type family Eval (vs :: [*]) (a :: *) :: * where
+    Eval '[] x = x
+    Eval (v ': vs) x = x
+
+eval :: b ~ Eval vs a => Expr vs a -> b
 eval e = case reduceAll e of
            O0 o                -> op0 o
            O1 (Con o) e1       -> op1 o (eval e1)
