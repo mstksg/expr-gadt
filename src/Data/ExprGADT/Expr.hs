@@ -1,18 +1,25 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.ExprGADT.Expr where
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
     IS :: Indexor ks k -> Indexor (j ': ks) k
+
+data HList :: [*] -> * where
+    HNil :: HList '[]
+    (:<) :: a -> HList as -> HList (a ': as)
+
+infixr 5 :<
 
 data Expr :: [*] -> * -> * where
     V        :: Indexor vs a                   -> Expr vs a
@@ -89,35 +96,31 @@ deriving instance Eq (Op3' a b c d)
 forbidden :: Expr vs a -> String -> b
 forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
 
--- eval :: Expr vs a -> a
 eval :: Expr '[] a -> a
-eval e = case reduceAll e of
-           O0 o                -> op0 o
-           O1 (Con o) e1       -> op1 o (eval e1)
-           O2 (Con o) e1 e2    -> op2 o (eval e1) (eval e2)
-           O3 (Con o) e1 e2 e3 -> op3 o (eval e1) (eval e2) (eval e3)
-           Lambda ef           -> \x -> evalWith (sub x) ef
-           V _           -> forbidden e "No variables possible..."
-                            -- after reduction, there should be no Dec
-                            -- constructors if there are no variables.
-           _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
-                                            , show e
-                                            ]
-  where
-    sub :: a -> Indexor (a ': '[]) v -> v
-    sub x IZ     = x
-    sub _ (IS _) = error "Impossible!!!"
+eval = evalWith HNil
 
-evalWith :: (forall v. Indexor vs v -> v) -> Expr vs a -> a
-evalWith f e = case e of
-                 V ix -> f ix
-                 Lambda ef -> undefined     -- next challenge!
-                 _    -> error $ show e
+evalWith :: forall vs a. HList vs -> Expr vs a -> a
+evalWith vs = go
   where
-    -- this is wrong
-    sub :: a -> Indexor (a ': vs) v -> v
-    sub x IZ = x
-    sub _ (IS _) = error "Actually very possible"
+    go :: forall b. Expr vs b -> b
+    go e = case reduceAll e of
+             V ix                -> subIndexor vs ix
+             O0 o                -> op0 o
+             O1 (Con o) e1       -> op1 o (go e1)
+             O2 (Con o) e1 e2    -> op2 o (go e1) (go e2)
+             O3 (Con o) e1 e2 e3 -> op3 o (go e1) (go e2) (go e3)
+             Lambda ef           -> \x -> evalWith (x :< vs) ef
+                              -- after reduction, there should be no Dec
+                              -- constructors if there are no variables.
+             _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
+                                              , show $ lengthHList vs
+                                              , show e
+                                              ]
+
+subIndexor :: forall ks. HList ks -> (forall v. Indexor ks v -> v)
+subIndexor (x :< _ ) IZ      = x
+subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
+subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
 
 
 -- reduce to only Con constructors, O0, and V...ideally.
@@ -403,6 +406,12 @@ op3'Eq If If = True
 instance Eq (Expr vs a) where
     (==) = exprEq
 
+instance Eq (HList '[]) where
+    HNil == HNil = True
+
+instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
+    x :< xs == y :< ys = x == y && xs == ys
+
 instance Show (Expr vs a) where
     showsPrec p e = showParen (p > 10) $ case e of
                       V ix -> showString "V "
@@ -430,9 +439,9 @@ instance Show (Expr vs a) where
                       Lambda ef -> showString "Lambda "
                                  . showsPrec 11 ef
                       -- should only parentheses when p > 1 i guess but oh well
-                      ef :$ ex -> showsPrec (p + 1) ef
+                      ef :$ ex -> showsPrec 1 ef  -- is this right?
                                 . showString " :$ "
-                                . showsPrec p ex
+                                . showsPrec 2 ex
                       Case ee el er -> showString "Case "
                                      . showsPrec 11 ee
                                      . showString " "
@@ -451,3 +460,15 @@ instance Show (Expr vs a) where
                                        . showsPrec 11 ez
                                        . showString " "
                                        . showsPrec 11 exs
+
+instance Show (HList '[]) where
+    showsPrec _ HNil = showString "HNil"
+
+instance (Show a, Show (HList as)) => Show (HList (a ': as)) where
+    showsPrec p (x :< xs) = showParen (p > 5) $ showsPrec 6 x
+                                              . showString " :< "
+                                              . showsPrec 5 xs
+
+lengthHList :: HList vs -> Int
+lengthHList HNil = 0
+lengthHList (_ :< xs) = 1 + lengthHList xs
