@@ -11,6 +11,8 @@
 
 module Data.ExprGADT.Expr where
 
+import Data.List (unfoldr)
+
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
     IS :: Indexor ks k -> Indexor (j ': ks) k
@@ -30,7 +32,7 @@ data Expr :: [*] -> * -> * where
     Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
     (:$)     :: Expr vs (a -> b)               -> Expr vs a             -> Expr vs b
     Case     :: Expr vs (Either a b)           -> Expr vs (a -> c)      -> Expr vs (b -> c) -> Expr vs c
-    UnfoldrN :: Expr vs Int                    -> Expr vs (a -> (a, b)) -> Expr vs a        -> Expr vs [b]
+    UnfoldrN :: Expr vs Int                    -> Expr vs (a -> (b, a)) -> Expr vs a        -> Expr vs [b]
     Foldr    :: Expr vs (a -> b -> b)          -> Expr vs b             -> Expr vs [a]      -> Expr vs b
 
 infixl 1 :$
@@ -106,16 +108,27 @@ evalWith vs = go
     go e = case reduceAll e of
              V ix                -> subIndexor vs ix
              O0 o                -> op0 o
-             O1 (Con o) e1       -> op1 o (go e1)
-             O2 (Con o) e1 e2    -> op2 o (go e1) (go e2)
-             O3 (Con o) e1 e2 e3 -> op3 o (go e1) (go e2) (go e3)
+             O1 o e1             -> onO op1 op1' o (go e1)
+             O2 o e1 e2          -> onO op2 op2' o (go e1) (go e2)
+             O3 o e1 e2 e3       -> onO op3 op3' o (go e1) (go e2) (go e3)
              Lambda ef           -> \x -> evalWith (x :< vs) ef
                               -- after reduction, there should be no Dec
                               -- constructors if there are no variables.
-             _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
-                                              , show $ lengthHList vs
-                                              , show e
-                                              ]
+             Foldr ef ez exs -> foldr (go ef) (go ez) (go exs)
+             Case ee el er -> case go ee of
+                                Left x  -> go el x
+                                Right x -> go er x
+             ef :$ ex        -> go ef $ go ex
+             UnfoldrN en ef ez -> take (go en) $ unfoldr (\x -> Just $ go ef x) (go ez)
+             -- ef :$ ex -> (go ef) (go ex)
+             -- _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
+             --                                  , show $ lengthHList vs
+             --                                  , show e
+             --                                  ]
+
+onO :: (a -> c) -> (b -> c) -> O a b -> c
+onO f _ (Con x) = f x
+onO _ g (Dec x) = g x
 
 subIndexor :: forall ks. HList ks -> (forall v. Indexor ks v -> v)
 subIndexor (x :< _ ) IZ      = x
@@ -189,16 +202,16 @@ reduceWith f = go
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
                             _                  -> Case (go ee) (go el) (go er)
-    reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (a, b)) -> Expr vs a -> Expr us [b]
+    reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr us [b]
     reduceUnfoldrN en ef ez = case reduce en of
                                 O0 (I i) | i <= 0    -> O0 Nil
                                          | otherwise -> go (unfold i)
                                 _                    -> UnfoldrN (go en) (go ef) (go ez)
       where
-        unfold i = Lambda (O2 (Con Cons) (O1 (Dec Snd) (V IZ))
+        unfold i = Lambda (O2 (Con Cons) (O1 (Dec Fst) (V IZ))
                                          (UnfoldrN (O0 (I (i - i)))
                                                    (shuffleVars IS ef)
-                                                   (O1 (Dec Fst) (V IZ))
+                                                   (O1 (Dec Snd) (V IZ))
                                          )
                           ) :$ (ef :$ ez)
     reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr us b
@@ -288,6 +301,10 @@ op1_ o = modder . op1 o
                Left'  -> const Nothing
                Right' -> const Nothing
 
+op1' :: Op1' a b -> a -> b
+op1' Fst = fst
+op1' Snd = snd
+
 op2 :: Op2 a b c -> a -> b -> c
 op2 Plus    = (+)
 op2 Times   = (*)
@@ -315,8 +332,14 @@ op2_ o x y = modder (op2 o x y)
                Tup     -> const Nothing
                Cons    -> const Nothing
 
+op2' :: Op2' a b c -> a -> b -> c
+op2' = error "No constructors of Op2'.  How absurd!"
+
 op3 :: Op3 a b c d -> a -> b -> c -> d
 op3 = error "No constructors of Op3.  How absurd!"
+
+op3' :: Op3' a b c d -> a -> b -> c -> d
+op3' If = \b x y -> if b then x else y
 
 instance Num (Expr vs Int) where
     (+)         = O2 (Con Plus)
