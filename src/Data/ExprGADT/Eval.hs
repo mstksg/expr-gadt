@@ -128,6 +128,8 @@ shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr 
 shuffleVars f = reduceWith (V . f)
 
 -- will this be good enough for monomorphic cases?
+-- might have to resort to doing something with Proxy and letting people
+-- manually state.
 
 class PushInto vs us where
     pushInto :: Expr vs a -> Expr us a

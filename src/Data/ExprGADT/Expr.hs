@@ -1,4 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.ExprGADT.Expr where
 
@@ -39,10 +42,23 @@ even' :: Expr vs Int -> Expr vs Bool
 even' ex = ex `mod'` 2 ~== 0
 
 curry' :: Expr vs ((a, b) -> c) -> Expr vs (a -> b -> c)
-curry' ef = λ .-> λ .-> shuffleVars (IS . IS) ef ~$ tup' (V (IS IZ)) (V IZ)
+curry' ef = λ .-> λ .-> pushInto ef ~$ tup' (V (IS IZ)) (V IZ)
 
 uncurry' :: Expr vs (a -> b -> c) -> Expr vs ((a, b) -> c)
-uncurry' ef = λ .-> shuffleVars IS ef ~$ fst' (V IZ) ~$ snd' (V IZ)
+uncurry' ef = λ .-> pushInto ef ~$ fst' (V IZ) ~$ snd' (V IZ)
 
 enumFromTo' :: Expr vs Int -> Expr vs Int -> Expr vs [Int]
 enumFromTo' e1 e2 = unfoldrN' (e2 - e1 + 1) (λ .-> tup' (V IZ) (V IZ + 1)) e1
+
+-- can be more general:
+-- inLambda :: (Expr (a' ': vs) a' -> Expr (a ': us) b) -> Expr us (a -> b)
+inLambda :: (Expr (a ': vs) a -> Expr (a ': vs) b) -> Expr vs (a -> b)
+inLambda f = λ .-> f (V IZ)
+
+inLambda2 :: (Expr (b ': a ': vs) a -> Expr (b ': a ': vs) b -> Expr (b ': a ': vs) c)
+          -> Expr vs (a -> b -> c)
+inLambda2 f = λ .-> λ .-> f (V (IS IZ)) (V IZ)
+
+inLambda3 :: (Expr (c ': b ': a ': vs) a -> Expr (c ': b ': a ': vs) b -> Expr (c ': b ': a ': vs) c -> Expr (c ': b ': a ': vs) d)
+          -> Expr vs (a -> b -> c -> d)
+inLambda3 f = λ .-> λ .-> λ .-> f (V (IS (IS IZ))) (V (IS IZ)) (V IZ)
