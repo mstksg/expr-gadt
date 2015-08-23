@@ -230,6 +230,15 @@ instance (Show a, Show (HList as)) => Show (HList (a ': as)) where
                                               . showString " :< "
                                               . showsPrec 5 xs
 
+exprLeafCount :: Expr vs a -> Int
+exprLeafCount e = case e of
+                    V _ -> 1
+                    O0 _ -> 1
+                    O1 _ e1 -> exprLeafCount e1
+                    O2 _ e1 e2 -> exprLeafCount e1 + exprLeafCount e2
+                    O3 _ e1 e2 e3 -> exprLeafCount e1 + exprLeafCount e2 + exprLeafCount e3
+                    Lambda ef -> exprLeafCount ef
+
 infixl 1 ~$
 (~$) :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
 (~$) = O2 (Dec Ap)

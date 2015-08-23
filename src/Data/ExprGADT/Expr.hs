@@ -71,7 +71,6 @@ take' en exs = foldr' step (const' nil') exs ~$ en
                                  n = V IZ
                              in  if' (n ~== iI 0) nil' (x ~: (g ~$ n - 1))
 
-
 -- can generate infinte expressions, obviously.
 fix' :: Expr vs (a -> a) -> Expr vs a
 fix' ef = ef ~$ fix' ef
