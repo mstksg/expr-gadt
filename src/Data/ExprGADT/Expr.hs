@@ -30,12 +30,6 @@ data Expr :: [*] -> * -> * where
     O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a             -> Expr vs b        -> Expr vs c
     O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a             -> Expr vs b        -> Expr vs c   -> Expr vs d
     Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
-    (:$)     :: Expr vs (a -> b)               -> Expr vs a             -> Expr vs b
-    Case     :: Expr vs (Either a b)           -> Expr vs (a -> c)      -> Expr vs (b -> c) -> Expr vs c
-    UnfoldrN :: Expr vs Int                    -> Expr vs (a -> (b, a)) -> Expr vs a        -> Expr vs [b]
-    Foldr    :: Expr vs (a -> b -> b)          -> Expr vs b             -> Expr vs [a]      -> Expr vs b
-
-infixl 1 :$
 
 data O :: * -> * -> * where
     Con :: a -> O a b
@@ -71,12 +65,16 @@ data Op2 :: * -> * -> * -> * where
     Tup     :: Op2 a b (a, b)
     Cons    :: Op2 a [a] [a]
 
-data Op2' :: * -> * -> * -> *
+data Op2' :: * -> * -> * -> * where
+    Ap       :: Op2' (a -> b) a b
 
 data Op3 :: * -> * -> * -> * -> *
 
 data Op3' :: * -> * -> * -> * -> * where
-    If :: Op3' Bool a a a
+    If       :: Op3' Bool a a a
+    Case     :: Op3' (Either a b) (a -> c) (b -> c) c
+    UnfoldrN :: Op3' Int (a -> (b, a)) a [b]
+    Foldr    :: Op3' (a -> b -> b) b [a] b
 
 deriving instance Show (Indexor ks k)
 deriving instance Show (Op0 a)
@@ -112,19 +110,6 @@ evalWith vs = go
              O2 o e1 e2          -> onO op2 op2' o (go e1) (go e2)
              O3 o e1 e2 e3       -> onO op3 op3' o (go e1) (go e2) (go e3)
              Lambda ef           -> \x -> evalWith (x :< vs) ef
-                              -- after reduction, there should be no Dec
-                              -- constructors if there are no variables.
-             Foldr ef ez exs -> foldr (go ef) (go ez) (go exs)
-             Case ee el er -> case go ee of
-                                Left x  -> go el x
-                                Right x -> go er x
-             ef :$ ex        -> go ef $ go ex
-             UnfoldrN en ef ez -> take (go en) $ unfoldr (\x -> Just $ go ef x) (go ez)
-             -- ef :$ ex -> (go ef) (go ex)
-             -- _             -> error $ unlines [ "Experienced unexpected fixed point...what happened?"
-             --                                  , show $ lengthHList vs
-             --                                  , show e
-             --                                  ]
 
 onO :: (a -> c) -> (b -> c) -> O a b -> c
 onO f _ (Con x) = f x
@@ -136,7 +121,6 @@ subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
 subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
 
 
--- reduce to only Con constructors, O0, and V...ideally.
 reduceAll :: Expr vs a -> Expr vs a
 reduceAll e | e == e'   = e'
             | otherwise = reduceAll e'
@@ -167,15 +151,14 @@ reduceWith f = go
                                                                         Just x -> O0 x
                                                                         _      -> O2 o (go e1) (go e2)
                                                 _           -> O2 o (go e1) (go e2)
-                                    Dec _ -> forbidden e "There aren't even any constructors for Op2'.  How absurd."
+                                    Dec Ap -> reduceAp e1 e2
              O3 o e1 e2 e3     -> case o of
-                                    Con _  -> forbidden e "There aren't even any constructors for Op3.  How absurd."
-                                    Dec If -> reduceIf e1 e2 e3
+                                    Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
+                                    Dec If       -> reduceIf e1 e2 e3
+                                    Dec Case     -> reduceCase e1 e2 e3
+                                    Dec UnfoldrN -> reduceUnfoldrN e1 e2 e3
+                                    Dec Foldr    -> reduceFoldr e1 e2 e3
              Lambda eλ         -> Lambda (go' eλ)
-             ef :$ ex          -> reduceAp ef ex
-             Case ee el er     -> reduceCase ee el er
-             UnfoldrN en ef ez -> reduceUnfoldrN en ef ez
-             Foldr ef ez exs   -> reduceFoldr ef ez exs
     reduceFst :: Expr vs (a, b) -> Expr us a
     reduceFst e' = case e' of
                      O2 (Con Tup) e1 _ -> go e1
@@ -192,7 +175,7 @@ reduceWith f = go
     reduceAp :: forall a b. Expr vs (a -> b) -> Expr vs a -> Expr us b
     reduceAp ef ex = case ef of
                        Lambda eλ -> go $ reduceWith apply eλ
-                       _         -> go ef :$ go ex
+                       _         -> O2 (Dec Ap) (go ef) (go ex)
       where
         apply :: forall k. Indexor (a ': vs) k -> Expr vs k
         apply IZ      = ex
@@ -201,25 +184,27 @@ reduceWith f = go
     reduceCase ee el er = case ee of
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
-                            _                  -> Case (go ee) (go el) (go er)
+                            _                  -> O3 (Dec Case) (go ee) (go el) (go er)
     reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr us [b]
     reduceUnfoldrN en ef ez = case reduce en of
                                 O0 (I i) | i <= 0    -> O0 Nil
                                          | otherwise -> go (unfold i)
-                                _                    -> UnfoldrN (go en) (go ef) (go ez)
+                                _                    -> O3 (Dec UnfoldrN) (go en) (go ef) (go ez)
       where
-        unfold i = Lambda (O2 (Con Cons) (O1 (Dec Fst) (V IZ))
-                                         (UnfoldrN (O0 (I (i - i)))
-                                                   (shuffleVars IS ef)
-                                                   (O1 (Dec Snd) (V IZ))
-                                         )
-                          ) :$ (ef :$ ez)
+        unfold i = O2 (Dec Ap) (Lambda (O2 (Con Cons) (O1 (Dec Fst) (V IZ))
+                                                      (O3 (Dec UnfoldrN) (O0 (I (i - i)))
+                                                                         (shuffleVars IS ef)
+                                                                         (O1 (Dec Snd) (V IZ))
+                                                      )
+                                       )
+                               )
+                               (O2 (Dec Ap) ef ez)
     reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr us b
     reduceFoldr ef ez exs = case reduce exs of
                               O0 Nil               -> go ez
-                              O2 (Con Cons) ey eys -> go $ ef :$ ey
-                                                              :$ Foldr ef ez eys
-                              _                    -> Foldr (go ef) (go ez) (go exs)
+                              O2 (Con Cons) ey eys -> go $ ef ~$ ey
+                                                              ~$ O3 (Dec Foldr) ef ez eys
+                              _                    -> O3 (Dec Foldr) (go ef) (go ez) (go exs)
     go' :: forall d a. Expr (d ': vs) a -> Expr (d ': us) a
     go' = reduceWith f'
       where
@@ -227,48 +212,128 @@ reduceWith f = go
         f' IZ      = V IZ
         f' (IS ix) = shuffleVars IS $ f ix
 
+infixl 1 ~$
+(~$) :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
+(~$) = O2 (Dec Ap)
+
+foldr' :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
+foldr' = O3 (Dec Foldr)
+
+case' :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
+case' = O3 (Dec Case)
+
+unfoldrN' :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
+unfoldrN' = O3 (Dec UnfoldrN)
+
+if' :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
+if' = O3 (Dec If)
+
+right' :: Expr vs b -> Expr vs (Either a b)
+right' = O1 (Con Right')
+
+left' :: Expr vs a -> Expr vs (Either a b)
+left' = O1 (Con Left')
+
+just' :: Expr vs b -> Expr vs (Either () b)
+just' = right'
+
+nothing' :: Expr vs (Either () b)
+nothing' = left' unit'
+
+tup' :: Expr vs a -> Expr vs b -> Expr vs (a, b)
+tup' = O2 (Con Tup)
+
+fst' :: Expr vs (a, b) -> Expr vs a
+fst' = O1 (Dec Fst)
+
+snd' :: Expr vs (a, b) -> Expr vs b
+snd' = O1 (Dec Snd)
+
+infixr 3 ~&&
+(~&&) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
+(~&&) = O2 (Con And)
+
+infixr 2 ~||
+(~||) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
+(~||) = O2 (Con Or)
+
+infix 4 ~<=
+(~<=) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
+(~<=) = O2 (Con LEquals)
+
+infix 4 ~==
+(~==) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
+e1 ~== e2 = (e1 ~<= e2) ~&& (e2 ~<= e1)
+
+infixl 7 `mod'`
+mod' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+mod' = O2 (Con Mod)
+
+infixl 7 `div'`
+div' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+div' = O2 (Con Div)
+
+infixr 5 ~:
+(~:) :: Expr vs a -> Expr vs [a] -> Expr vs [a]
+(~:) = O2 (Con Cons)
+
+unit' :: Expr vs ()
+unit' = O0 Unit
+
+nil' :: Expr vs [a]
+nil' = O0 Nil
+
+false' :: Expr vs Bool
+false' = O0 (B False)
+
+true' :: Expr vs Bool
+true' = O0 (B True)
+
+λ :: Expr (a ': vs) b -> Expr vs (a -> b)
+λ = Lambda
+
+infixr 0 .->
+(.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
+(.->) = ($)
+
 uncons' :: Expr vs [a] -> Expr vs (Either () (a, [a]))
-uncons' = Foldr (Lambda (Lambda (O1 (Con Right') (Case (V IZ) caseNil caseCons)))) (O1 (Con Left') (O0 Unit))
+uncons' = foldr' (λ .-> λ .-> right' (case' (V IZ) caseNil caseCons)) nothing'
   where
-    caseNil  = Lambda $ O2 (Con Tup) (V (IS (IS IZ))) (O0 Nil)
-    caseCons = Lambda $ O2 (Con Tup) (V (IS (IS IZ))) (O2 (Con Cons) (O1 (Dec Fst) (V IZ)) (O1 (Dec Snd) (V IZ)))
+    caseNil  = λ .-> tup' (V (IS (IS IZ))) nil'
+    caseCons = λ .-> tup' (V (IS (IS IZ))) (fst' (V IZ) ~: snd' (V IZ))
 
 mapMaybe' :: Expr vs (a -> Either () b) -> Expr vs [a] -> Expr vs [b]
-mapMaybe' ef = Foldr folder (O0 Nil)
+mapMaybe' ef = foldr' folder nil'
   where
-    folder = Lambda . Lambda $ Case (shuffleVars (IS . IS) ef :$ V (IS IZ))
-                                    (Lambda $ V (IS IZ))
-                                    (Lambda $ O2 (Con Cons) (V IZ) (V (IS IZ)))
+    folder = λ .-> λ .-> case' (shuffleVars (IS . IS) ef ~$ V (IS IZ))
+                               (λ .-> V (IS IZ))
+                               (λ .-> V IZ ~: V (IS IZ))
 
 map' :: Expr vs (a -> b) -> Expr vs [a] -> Expr vs [b]
-map' ef = mapMaybe' . Lambda $ O1 (Con Right') (shuffleVars IS ef :$ V IZ)
+map' ef = mapMaybe' $ λ .-> just' (shuffleVars IS ef ~$ V IZ)
 
 either' :: Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs (Either a b) -> Expr vs c
-either' el er ee = Case ee el er
+either' el er ee = case' ee el er
 
 isRight' :: Expr vs (Either a b) -> Expr vs Bool
-isRight' = either' (Lambda $ O0 (B False)) (Lambda $ O0 (B True))
+isRight' = either' (λ .-> false') (λ .-> true')
 
 filter' :: Expr vs (a -> Bool) -> Expr vs [a] -> Expr vs [a]
-filter' ef = mapMaybe' . Lambda $ O3 (Dec If)
-                                     (shuffleVars IS ef :$ V IZ)
-                                     (O1 (Con Right') (V IZ))
-                                     (O1 (Con Left') (O0 Unit))
+filter' ef = mapMaybe' $ λ .-> if' (shuffleVars IS ef ~$ V IZ)
+                                   (just' (V IZ))
+                                   nothing'
 
 sum' :: Expr vs [Int] -> Expr vs Int
-sum' = Foldr (Lambda . Lambda $ O2 (Con Plus) (V IZ) (V (IS IZ))) (O0 (I 0))
-
-equals :: Expr vs Int -> Expr vs Int -> Expr vs Bool
-equals e1 e2 = O2 (Con And) (O2 (Con LEquals) e1 e2) (O2 (Con LEquals) e2 e1)
+sum' = foldr' (λ .-> λ .-> V IZ + V (IS IZ)) 1
 
 even' :: Expr vs Int -> Expr vs Bool
-even' ex = equals (O2 (Con Mod) ex (O0 (I 2))) (O0 (I 0))
+even' ex = ex `mod'` 2 ~== 0
 
 curry' :: Expr vs ((a, b) -> c) -> Expr vs (a -> b -> c)
-curry' ef = Lambda . Lambda $ shuffleVars (IS . IS) ef :$ O2 (Con Tup) (V (IS IZ)) (V IZ)
+curry' ef = λ .-> λ .-> shuffleVars (IS . IS) ef ~$ tup' (V (IS IZ)) (V IZ)
 
 uncurry' :: Expr vs (a -> b -> c) -> Expr vs ((a, b) -> c)
-uncurry' ef = Lambda $ shuffleVars IS ef :$ O1 (Dec Fst) (V IZ) :$ O1 (Dec Snd) (V IZ)
+uncurry' ef = λ .-> shuffleVars IS ef ~$ fst' (V IZ) ~$ snd' (V IZ)
 
 shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
 shuffleVars f = reduceWith (V . f)
@@ -333,13 +398,17 @@ op2_ o x y = modder (op2 o x y)
                Cons    -> const Nothing
 
 op2' :: Op2' a b c -> a -> b -> c
-op2' = error "No constructors of Op2'.  How absurd!"
+op2' Ap = ($)
 
 op3 :: Op3 a b c d -> a -> b -> c -> d
 op3 = error "No constructors of Op3.  How absurd!"
 
 op3' :: Op3' a b c d -> a -> b -> c -> d
-op3' If = \b x y -> if b then x else y
+op3' If       = \b x y -> if b then x else y
+op3' Case     = \e l r -> either l r e
+op3' UnfoldrN = \n f z -> take n $ unfoldr (Just . f) z
+op3' Foldr    = foldr
+
 
 instance Num (Expr vs Int) where
     (+)         = O2 (Con Plus)
@@ -379,14 +448,10 @@ exprEq (O0 o1) (O0 o2) = op0Eq o1 o2
 exprEq (O1 (Con o1) e1) (O1 (Con o2) e2) = op1Eq o1 o2 && exprEq e1 e2
 exprEq (O1 (Dec o1) e1) (O1 (Dec o2) e2) = op1'Eq o1 o2 && exprEq e1 e2
 exprEq (O2 (Con o1) e1 e1') (O2 (Con o2) e2 e2') = op2Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
-exprEq (O2 (Dec _) e1 e1') (O2 (Dec _) e2 e2') = exprEq e1 e2 && exprEq e1' e2'
+exprEq (O2 (Dec o1) e1 e1') (O2 (Dec o2) e2 e2') = op2'Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
 exprEq (O3 (Con _) e1 e1' e1'') (O3 (Con _) e2 e2' e2'') = exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
 exprEq (O3 (Dec o1) e1 e1' e1'') (O3 (Dec o2) e2 e2' e2'') = op3'Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
 exprEq (Lambda f1) (Lambda f2) = exprEq f1 f2
-exprEq (f1 :$ x1) (f2 :$ x2) = exprEq f1 f2 && exprEq x1 x2
-exprEq (Case e1 l1 r1) (Case e2 l2 r2) = exprEq e1 e2 && exprEq l1 l2 && exprEq r1 r2
-exprEq (UnfoldrN n1 f1 z1) (UnfoldrN n2 f2 z2) = exprEq n1 n2 && exprEq f1 f2 && exprEq z1 z2
-exprEq (Foldr f1 z1 xs1) (Foldr f2 z2 xs2) = exprEq f1 f2 && exprEq z1 z2 && exprEq xs1 xs2
 exprEq _ _ = False
 
 op0Eq :: Op0 a -> Op0 b -> Bool
@@ -397,34 +462,40 @@ op0Eq Unit   Unit   = True
 op0Eq _      _      = False
 
 op1Eq :: Op1 a b -> Op1 c d -> Bool
-op1Eq Abs Abs = True
+op1Eq Abs Abs       = True
 op1Eq Signum Signum = True
-op1Eq Not Not = True
-op1Eq Left' Left' = True
+op1Eq Not Not       = True
+op1Eq Left' Left'   = True
 op1Eq Right' Right' = True
-op1Eq _ _ = False
+op1Eq _ _           = False
 
 op1'Eq :: Op1' a b -> Op1' c d -> Bool
 op1'Eq Fst Fst = True
 op1'Eq Snd Snd = True
-op1'Eq _ _ = False
+op1'Eq _   _   = False
 
 op2Eq :: Op2 a b c -> Op2 d e f -> Bool
-op2Eq Plus Plus = True
-op2Eq Times Times = True
-op2Eq Minus Minus = True
-op2Eq Div Div = True
-op2Eq Mod Mod = True
+op2Eq Plus Plus       = True
+op2Eq Times Times     = True
+op2Eq Minus Minus     = True
+op2Eq Div Div         = True
+op2Eq Mod Mod         = True
 op2Eq LEquals LEquals = True
-op2Eq And And = True
-op2Eq Or Or = True
-op2Eq Tup Tup = True
-op2Eq Cons Cons = True
-op2Eq _ _ = False
+op2Eq And And         = True
+op2Eq Or Or           = True
+op2Eq Tup Tup         = True
+op2Eq Cons Cons       = True
+op2Eq _ _             = False
+
+op2'Eq :: Op2' a b c -> Op2' d e f -> Bool
+op2'Eq Ap Ap = True
 
 op3'Eq :: Op3' a b c d -> Op3' e f g h -> Bool
-op3'Eq If If = True
--- op3'Eq _ _ = False
+op3'Eq If If             = True
+op3'Eq Case Case         = True
+op3'Eq UnfoldrN UnfoldrN = True
+op3'Eq Foldr Foldr       = True
+op3'Eq _ _               = False
 
 instance Eq (Expr vs a) where
     (==) = exprEq
@@ -461,28 +532,6 @@ instance Show (Expr vs a) where
                                      . showsPrec 11 e3
                       Lambda ef -> showString "Lambda "
                                  . showsPrec 11 ef
-                      -- should only parentheses when p > 1 i guess but oh well
-                      ef :$ ex -> showsPrec 1 ef  -- is this right?
-                                . showString " :$ "
-                                . showsPrec 2 ex
-                      Case ee el er -> showString "Case "
-                                     . showsPrec 11 ee
-                                     . showString " "
-                                     . showsPrec 11 el
-                                     . showString " "
-                                     . showsPrec 11 er
-                      UnfoldrN en ef ez -> showString "UnfoldrN "
-                                         . showsPrec 11 en
-                                         . showString " "
-                                         . showsPrec 11 ef
-                                         . showString " "
-                                         . showsPrec 11 ez
-                      Foldr ef ez exs -> showString "Foldr "
-                                       . showsPrec 11 ef
-                                       . showString " "
-                                       . showsPrec 11 ez
-                                       . showString " "
-                                       . showsPrec 11 exs
 
 instance Show (HList '[]) where
     showsPrec _ HNil = showString "HNil"
