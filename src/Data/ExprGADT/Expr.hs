@@ -36,6 +36,7 @@ unfoldrNUntil' en ef ez = mapMaybe' id' (unfoldrN' en ef' (just' ez))
     breakUp = λ .-> caseMaybe' (V IZ) (tup' nothing' nothing')
                                       (λ .-> tup' (just' (fst' (V IZ))) (just' (snd' (V IZ))))
 
+infixr 9 ~.
 (~.) :: Expr vs (b -> c) -> Expr vs (a -> b) -> Expr vs (a -> c)
 ef ~. eg = λ .-> pushInto ef ~$ (pushInto eg ~$ V IZ)
 
@@ -95,6 +96,15 @@ take' en exs = foldr' step (const' nil') exs ~$ en
 -- lists, very slow!
 take'' :: Expr vs Int -> Expr vs [a] -> Expr vs [a]
 take'' en = unfoldrNUntil' en (inLambda uncons')
+
+(~++) :: Expr vs [a] -> Expr vs [a] -> Expr vs [a]
+exs ~++ eys = foldr' aggregate id' exs ~$ eys
+  where
+    aggregate :: Expr vs (a -> ([a] -> [a]) -> [a] -> [a])
+    aggregate = λ .-> λ .-> λ .-> let x  = V (IS (IS IZ))
+                                      g  = V (IS IZ)
+                                      ys = V IZ
+                                  in  x ~: (g ~$ ys)
 
 -- can generate infinte expressions, obviously.
 fix' :: Expr vs (a -> a) -> Expr vs a
