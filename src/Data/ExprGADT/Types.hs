@@ -302,6 +302,12 @@ false' = O0 (B False)
 true' :: Expr vs Bool
 true' = O0 (B True)
 
+iI :: Int -> Expr vs Int
+iI = O0 . I
+
+bB :: Bool -> Expr vs Bool
+bB = O0 . B
+
 λ :: Expr (a ': vs) b -> Expr vs (a -> b)
 λ = Lambda
 

@@ -1,11 +1,15 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE IncoherentInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.ExprGADT.Eval where
 
+import Debug.Trace
 import Data.ExprGADT.Types
 import Data.List (unfoldr)
 
@@ -74,20 +78,20 @@ reduceWith f = go
     reduceFst :: Expr vs (a, b) -> Expr us a
     reduceFst e' = case e' of
                      O2 (Con Tup) e1 _ -> go e1
-                     _                 -> O1 (Dec Fst) (go e')
+                     _                 -> fst' (go e')
     reduceSnd :: Expr vs (a, b) -> Expr us b
     reduceSnd e' = case e' of
                      O2 (Con Tup) _ e2 -> go e2
-                     _                 -> O1 (Dec Snd) (go e')
+                     _                 -> snd' (go e')
     reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr us a
     reduceIf eb ex ey = case eb of
                           O0 (B b) | b         -> go ex
                                    | otherwise -> go ey
-                          _                    -> O3 (Dec If) (go eb) (go ex) (go ey)
+                          _                    -> if' (go eb) (go ex) (go ey)
     reduceAp :: forall a b. Expr vs (a -> b) -> Expr vs a -> Expr us b
     reduceAp ef ex = case ef of
                        Lambda eλ -> go $ reduceWith apply eλ
-                       _         -> O2 (Dec Ap) (go ef) (go ex)
+                       _         -> go ef ~$ go ex
       where
         apply :: forall k. Indexor (a ': vs) k -> Expr vs k
         apply IZ      = ex
@@ -96,27 +100,23 @@ reduceWith f = go
     reduceCase ee el er = case ee of
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
-                            _                  -> O3 (Dec Case) (go ee) (go el) (go er)
+                            _                  -> case' (go ee) (go el) (go er)
     reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr us [b]
     reduceUnfoldrN en ef ez = case reduce en of
-                                O0 (I i) | i <= 0    -> O0 Nil
-                                         | otherwise -> go (unfold i)
-                                _                    -> O3 (Dec UnfoldrN) (go en) (go ef) (go ez)
+                                O0 (I i) | i <= 0    -> nil'
+                                         | otherwise -> go (unfold (i - 1))
+                                _                    -> unfoldrN' (go en) (go ef) (go ez)
       where
-        unfold i = O2 (Dec Ap) (Lambda (O2 (Con Cons) (O1 (Dec Fst) (V IZ))
-                                                      (O3 (Dec UnfoldrN) (O0 (I (i - i)))
-                                                                         (shuffleVars IS ef)
-                                                                         (O1 (Dec Snd) (V IZ))
-                                                      )
-                                       )
-                               )
-                               (O2 (Dec Ap) ef ez)
+        unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
+                                                   (pushInto ef)
+                                                   (snd' (V IZ))
+                   ) ~$ (ef ~$ ez)
     reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr us b
     reduceFoldr ef ez exs = case reduce exs of
                               O0 Nil               -> go ez
                               O2 (Con Cons) ey eys -> go $ ef ~$ ey
-                                                              ~$ O3 (Dec Foldr) ef ez eys
-                              _                    -> O3 (Dec Foldr) (go ef) (go ez) (go exs)
+                                                              ~$ foldr' ef ez eys
+                              _                    -> foldr' (go ef) (go ez) (go exs)
     go' :: forall d a. Expr (d ': vs) a -> Expr (d ': us) a
     go' = reduceWith f'
       where
@@ -127,10 +127,16 @@ reduceWith f = go
 shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
 shuffleVars f = reduceWith (V . f)
 
-pushDown :: (Indexor ks k -> Indexor js k) -> Indexor (a ': ks) k -> Indexor (a ': js) k
-pushDown f ix = case ix of
-                  IZ     -> IZ
-                  IS ix' -> IS (f ix')
+-- will this be good enough for monomorphic cases?
+
+class PushInto vs us where
+    pushInto :: Expr vs a -> Expr us a
+
+instance PushInto vs vs where
+    pushInto = id
+
+instance PushInto vs us => PushInto vs (v ': us) where
+    pushInto = shuffleVars IS . pushInto
 
 op0 :: Op0 a -> a
 op0 (I i) = i
