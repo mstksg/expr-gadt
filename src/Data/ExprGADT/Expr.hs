@@ -56,8 +56,25 @@ curry' ef = λ .-> λ .-> pushInto ef ~$ tup' (V (IS IZ)) (V IZ)
 uncurry' :: Expr vs (a -> b -> c) -> Expr vs ((a, b) -> c)
 uncurry' ef = λ .-> pushInto ef ~$ fst' (V IZ) ~$ snd' (V IZ)
 
+const' :: Expr vs a -> Expr vs (b -> a)
+const' e = λ .-> pushInto e
+
 enumFromTo' :: Expr vs Int -> Expr vs Int -> Expr vs [Int]
 enumFromTo' e1 e2 = unfoldrN' (e2 - e1 + 1) (λ .-> tup' (V IZ) (V IZ + 1)) e1
+
+take' :: forall vs a. Expr vs Int -> Expr vs [a] -> Expr vs [a]
+take' en exs = foldr' step (const' nil') exs ~$ en
+  where
+    step :: Expr vs (a -> (Int -> [a]) -> Int -> [a])
+    step = λ .-> λ .-> λ .-> let x = V (IS (IS IZ))
+                                 g = V (IS IZ)
+                                 n = V IZ
+                             in  if' (n ~== iI 0) nil' (x ~: (g ~$ n - 1))
+
+
+-- can generate infinte expressions, obviously.
+fix' :: Expr vs (a -> a) -> Expr vs a
+fix' ef = ef ~$ fix' ef
 
 -- can be more general:
 -- inLambda :: (Expr (a' ': vs) a' -> Expr (a ': us) b) -> Expr us (a -> b)

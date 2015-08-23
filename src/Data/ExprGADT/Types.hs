@@ -25,9 +25,9 @@ infixr 5 :<
 data Expr :: [*] -> * -> * where
     V        :: Indexor vs a                   -> Expr vs a
     O0       :: Op0 a                          -> Expr vs a
-    O1       :: O (Op1 a b)     (Op1' a b)     -> Expr vs a             -> Expr vs b
-    O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a             -> Expr vs b        -> Expr vs c
-    O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a             -> Expr vs b        -> Expr vs c   -> Expr vs d
+    O1       :: O (Op1 a b)     (Op1' a b)     -> Expr vs a        -> Expr vs b
+    O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a        -> Expr vs b -> Expr vs c
+    O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a        -> Expr vs b -> Expr vs c -> Expr vs d
     Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
 
 type Maybe' = Either ()
