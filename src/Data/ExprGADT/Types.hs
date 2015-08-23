@@ -27,6 +27,8 @@ data Expr :: [*] -> * -> * where
     O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a             -> Expr vs b        -> Expr vs c   -> Expr vs d
     Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
 
+type Maybe' = Either ()
+
 data O :: * -> * -> * where
     Con :: a -> O a b
     Dec :: b -> O a b
@@ -247,10 +249,10 @@ right' = O1 (Con Right')
 left' :: Expr vs a -> Expr vs (Either a b)
 left' = O1 (Con Left')
 
-just' :: Expr vs b -> Expr vs (Either () b)
+just' :: Expr vs b -> Expr vs (Maybe' b)
 just' = right'
 
-nothing' :: Expr vs (Either () b)
+nothing' :: Expr vs (Maybe' b)
 nothing' = left' unit'
 
 tup' :: Expr vs a -> Expr vs b -> Expr vs (a, b)
@@ -312,6 +314,7 @@ bB = O0 . B
 λ = Lambda
 
 infixr 0 .->
-(.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
+-- (.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
+-- (.->) :: (a -> b) -> a -> b
 (.->) = ($)
 

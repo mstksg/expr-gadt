@@ -2,7 +2,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE IncoherentInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
@@ -130,6 +133,9 @@ shuffleVars f = reduceWith (V . f)
 -- will this be good enough for monomorphic cases?
 -- might have to resort to doing something with Proxy and letting people
 -- manually state.
+--
+-- looks like it defers to "push as much as possible", which maybe or maybe
+-- not be the best desire for monomorphic code...
 
 class PushInto vs us where
     pushInto :: Expr vs a -> Expr us a
@@ -139,6 +145,20 @@ instance PushInto vs vs where
 
 instance PushInto vs us => PushInto vs (v ': us) where
     pushInto = shuffleVars IS . pushInto
+
+-- gives a pushing function for each layer introduced
+-- doesn't look good because requres $ cause existentials, so can't use .->
+-- and pretty stuff like that :(
+λ' :: ((forall c. Expr vs c -> Expr (a ': vs) c)
+   -> Expr (a ': vs) b)
+   -> Expr vs (a -> b)
+λ' toPush = λ .-> toPush (shuffleVars IS)
+
+-- gives a pushing function
+lambda' :: ((forall c. Expr vs c -> Expr (a ': vs) c)
+        -> Expr (a ': vs) b)
+        -> Expr vs (a -> b)
+lambda' = λ'
 
 op0 :: Op0 a -> a
 op0 (I i) = i

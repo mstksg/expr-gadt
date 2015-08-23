@@ -8,24 +8,33 @@ module Data.ExprGADT.Expr where
 import Data.ExprGADT.Types
 import Data.ExprGADT.Eval
 
-uncons' :: Expr vs [a] -> Expr vs (Either () (a, [a]))
-uncons' = foldr' (λ .-> λ .-> right' (case' (V IZ) caseNil caseCons)) nothing'
+uncons' :: forall vs a. Expr vs [a] -> Expr vs (Maybe' (a, [a]))
+uncons' = foldr' (λ .-> λ .-> just' (caseMaybe' (V IZ) caseNil caseCons)) nothing'
   where
-    caseNil  = λ .-> tup' (V (IS (IS IZ))) nil'
+    caseNil :: Expr (Maybe' (a, [a]) ': a ': vs) (a, [a])
+    caseNil  = tup' (V (IS IZ)) nil'
+    caseCons :: Expr (Maybe' (a, [a]) ': a ': vs) ((a, [a]) -> (a, [a]))
     caseCons = λ .-> tup' (V (IS (IS IZ))) (fst' (V IZ) ~: snd' (V IZ))
 
-mapMaybe' :: Expr vs (a -> Either () b) -> Expr vs [a] -> Expr vs [b]
+mapMaybe' :: forall vs a b. Expr vs (a -> Maybe' b) -> Expr vs [a] -> Expr vs [b]
 mapMaybe' ef = foldr' folder nil'
   where
-    folder = λ .-> λ .-> case' (pushInto ef ~$ V (IS IZ))
-                               (λ .-> V (IS IZ))
-                               (λ .-> V IZ ~: V (IS IZ))
+    folder :: Expr vs (a -> [b] -> [b])
+    folder = λ .-> λ .-> caseMaybe' (pushInto ef ~$ V (IS IZ))
+                                    (V IZ)
+                                    (λ .-> V IZ ~: V (IS IZ))
 
 map' :: Expr vs (a -> b) -> Expr vs [a] -> Expr vs [b]
 map' ef = mapMaybe' $ λ .-> just' (pushInto ef ~$ V IZ)
 
 either' :: Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs (Either a b) -> Expr vs c
 either' el er ee = case' ee el er
+
+maybe' :: Expr vs c -> Expr vs (a -> c) -> Expr vs (Maybe' a) -> Expr vs c
+maybe' en = either' (λ .-> pushInto en)
+
+caseMaybe' :: Expr vs (Maybe' a) -> Expr vs c -> Expr vs (a -> c) -> Expr vs c
+caseMaybe' em en ej = maybe' en ej em
 
 isRight' :: Expr vs (Either a b) -> Expr vs Bool
 isRight' = either' (λ .-> false') (λ .-> true')
