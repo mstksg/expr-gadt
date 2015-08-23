@@ -20,6 +20,7 @@ library
   exposed-modules:     Data.ExprGADT.Expr
                        Data.ExprGADT.Types
                        Data.ExprGADT.Eval
+                       Data.ExprGADT.Generate
                        Data.Rando
   -- other-modules:       
   -- other-extensions:    

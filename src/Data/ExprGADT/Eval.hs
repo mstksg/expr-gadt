@@ -188,8 +188,8 @@ op2 :: Op2 a b c -> a -> b -> c
 op2 Plus    = (+)
 op2 Times   = (*)
 op2 Minus   = (-)
-op2 Div     = div
-op2 Mod     = mod
+op2 Div     = \x y -> if y == 0 then Left () else Right (x `div` y)
+op2 Mod     = \x y -> if y == 0 then Left () else Right (x `mod` y)
 op2 LEquals = (<=)
 op2 And     = (&&)
 op2 Or      = (||)
@@ -203,13 +203,13 @@ op2_ o x y = modder (op2 o x y)
                Plus    -> Just . I
                Times   -> Just . I
                Minus   -> Just . I
-               Div     -> Just . I
-               Mod     -> Just . I
                LEquals -> Just . B
                And     -> Just . B
                Or      -> Just . B
                Tup     -> const Nothing
                Cons    -> const Nothing
+               Div     -> const Nothing
+               Mod     -> const Nothing
 
 op2' :: Op2' a b c -> a -> b -> c
 op2' Ap = ($)

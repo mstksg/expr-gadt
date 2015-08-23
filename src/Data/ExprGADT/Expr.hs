@@ -27,11 +27,29 @@ mapMaybe' ef = foldr' folder nil'
 map' :: Expr vs (a -> b) -> Expr vs [a] -> Expr vs [b]
 map' ef = mapMaybe' $ λ .-> just' (pushInto ef ~$ V IZ)
 
+unfoldrNUntil' :: forall vs a b. Expr vs Int -> Expr vs (a -> Maybe' (b, a)) -> Expr vs a -> Expr vs [b]
+unfoldrNUntil' en ef ez = mapMaybe' id' (unfoldrN' en ef' (just' ez))
+  where
+    ef' :: Expr vs (Maybe' a -> (Maybe' b, Maybe' a))
+    ef' = λ .-> caseMaybe' (V IZ) (tup' nothing' nothing') (breakUp ~. pushInto ef)
+    breakUp :: Expr us (Maybe' (b, a) -> (Maybe' b, Maybe' a))
+    breakUp = λ .-> caseMaybe' (V IZ) (tup' nothing' nothing')
+                                      (λ .-> tup' (just' (fst' (V IZ))) (just' (snd' (V IZ))))
+
+(~.) :: Expr vs (b -> c) -> Expr vs (a -> b) -> Expr vs (a -> c)
+ef ~. eg = λ .-> pushInto ef ~$ (pushInto eg ~$ V IZ)
+
 either' :: Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs (Either a b) -> Expr vs c
 either' el er ee = case' ee el er
 
 maybe' :: Expr vs c -> Expr vs (a -> c) -> Expr vs (Maybe' a) -> Expr vs c
 maybe' en = either' (λ .-> pushInto en)
+
+fromMaybe' :: Expr vs a -> Expr vs (Maybe' a) -> Expr vs a
+fromMaybe' en = maybe' en id'
+
+id' :: Expr vs (a -> a)
+id' = λ .-> V IZ
 
 caseMaybe' :: Expr vs (Maybe' a) -> Expr vs c -> Expr vs (a -> c) -> Expr vs c
 caseMaybe' em en ej = maybe' en ej em
@@ -48,7 +66,7 @@ sum' :: Expr vs [Int] -> Expr vs Int
 sum' = foldr' (λ .-> λ .-> V IZ + V (IS IZ)) 0
 
 even' :: Expr vs Int -> Expr vs Bool
-even' ex = ex `mod'` 2 ~== 0
+even' ex = maybe' false' (λ .-> V IZ ~== 0) (ex `mod'` 2)
 
 curry' :: Expr vs ((a, b) -> c) -> Expr vs (a -> b -> c)
 curry' ef = λ .-> λ .-> pushInto ef ~$ tup' (V (IS IZ)) (V IZ)
@@ -62,6 +80,8 @@ const' e = λ .-> pushInto e
 enumFromTo' :: Expr vs Int -> Expr vs Int -> Expr vs [Int]
 enumFromTo' e1 e2 = unfoldrN' (e2 - e1 + 1) (λ .-> tup' (V IZ) (V IZ + 1)) e1
 
+-- some pretty crazy higher order functions here...
+-- in many cases even works on infinite lists
 take' :: forall vs a. Expr vs Int -> Expr vs [a] -> Expr vs [a]
 take' en exs = foldr' step (const' nil') exs ~$ en
   where
@@ -70,6 +90,11 @@ take' en exs = foldr' step (const' nil') exs ~$ en
                                  g = V (IS IZ)
                                  n = V IZ
                              in  if' (n ~== iI 0) nil' (x ~: (g ~$ n - 1))
+
+-- the naive approach using iterated uncons, doesn't work for infinite
+-- lists, very slow!
+take'' :: Expr vs Int -> Expr vs [a] -> Expr vs [a]
+take'' en = unfoldrNUntil' en (inLambda uncons')
 
 -- can generate infinte expressions, obviously.
 fix' :: Expr vs (a -> a) -> Expr vs a

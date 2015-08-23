@@ -4,13 +4,12 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.ExprGADT.Types where
-
-import Data.Rando
-import Control.Monad.Random
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
@@ -58,8 +57,8 @@ data Op2 :: * -> * -> * -> * where
     Plus    :: Op2 Int Int Int
     Times   :: Op2 Int Int Int
     Minus   :: Op2 Int Int Int
-    Div     :: Op2 Int Int Int
-    Mod     :: Op2 Int Int Int
+    Div     :: Op2 Int Int (Maybe' Int)
+    Mod     :: Op2 Int Int (Maybe' Int)
     LEquals :: Op2 Int Int Bool
     And     :: Op2 Bool Bool Bool
     Or      :: Op2 Bool Bool Bool
@@ -77,6 +76,21 @@ data Op3' :: * -> * -> * -> * -> * where
     UnfoldrN :: Op3' Int (a -> (b, a)) a [b]
     Foldr    :: Op3' (a -> b -> b) b [a] b
 
+data EType :: * -> * where
+  EInt :: EType Int
+  EBool :: EType Bool
+  EUnit :: EType ()
+  ETup :: EType a -> EType b -> EType (a, b)
+  EEither :: EType a -> EType b -> EType (Either a b)
+  EFunc :: EType a -> EType b -> EType (a -> b)
+  EList :: EType a -> EType [a]
+
+data ExprW :: * where
+    EW :: EType a -> Expr vs a -> ExprW
+
+data ETypeW :: * where
+    ETW :: EType a -> ETypeW
+
 deriving instance Show (Indexor ks k)
 deriving instance Show (Op0 a)
 deriving instance Show (Op1 a b)
@@ -85,6 +99,9 @@ deriving instance Show (Op2 a b c)
 deriving instance Show (Op2' a b c)
 deriving instance Show (Op3 a b c d)
 deriving instance Show (Op3' a b c d)
+deriving instance Show (EType a)
+deriving instance Show ExprW
+deriving instance Show ETypeW
 deriving instance Eq (Indexor ks k)
 deriving instance Eq (Op0 a)
 deriving instance Eq (Op1 a b)
@@ -93,6 +110,8 @@ deriving instance Eq (Op2 a b c)
 deriving instance Eq (Op2' a b c)
 deriving instance Eq (Op3 a b c d)
 deriving instance Eq (Op3' a b c d)
+deriving instance Eq (EType a)
+-- deriving instance Eq ExprW
 
 class ToExpr a where
     toExpr :: a -> Expr vs a
@@ -239,6 +258,18 @@ exprLeafCount e = case e of
                     O3 _ e1 e2 e3 -> exprLeafCount e1 + exprLeafCount e2 + exprLeafCount e3
                     Lambda ef -> exprLeafCount ef
 
+exprLeafDepths :: Expr vs a -> [Int]
+exprLeafDepths e = go 0 e []
+  where
+    go :: Int -> Expr vs a -> [Int] -> [Int]
+    go n e' = case e' of
+                V _ -> (n:)
+                O0 _ -> (n:)
+                O1 _ e1 -> go (n + 1) e1
+                O2 _ e1 e2 -> go (n + 1) e1 . go (n + 1) e2
+                O3 _ e1 e2 e3 -> go (n + 1) e1 . go (n + 1) e2 . go (n + 1) e3
+                Lambda ef -> go (n + 1) ef
+
 infixl 1 ~$
 (~$) :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
 (~$) = O2 (Dec Ap)
@@ -311,11 +342,11 @@ xor' :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
 xor' e1 e2 = (e1 ~|| e2) ~&& not' (e1 ~&& e2)
 
 infixl 7 `mod'`
-mod' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+mod' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
 mod' = O2 (Con Mod)
 
 infixl 7 `div'`
-div' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+div' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
 div' = O2 (Con Div)
 
 infixr 5 ~:
@@ -347,165 +378,3 @@ infixr 0 .->
 (.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
 (.->) = ($)
 
-instance Rando (Expr '[] Int) where
-    rando 0 = iI <$> getRandomR (-10,10)
-    rando d = do
-        c <- getRandomR (0, 12 :: Int)
-        case c of
-          0 -> iI <$> getRandomR (-10, 10)
-          1 -> abs <$> rando (d - 1)
-          2 -> signum <$> rando (d - 1)
-          -- fst -- (Int, a)
-          3 -> undefined
-          -- snd -- (a, Int)
-          4 -> undefined
-          5 -> (+) <$> rando (d - 1) <*> rando (d - 1)
-          6 -> (*) <$> rando (d - 1) <*> rando (d - 1)
-          7 -> div' <$> rando (d - 1) <*> rando (d - 1)
-          8 -> mod' <$> rando (d - 1) <*> rando (d - 1)
-          -- ap -- (a -> Int), a
-          9 -> undefined
-          10 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
-          -- case -- Either a b, (a -> Int), (b -> Int)
-          11 -> undefined
-          -- foldr -- (a -> (Int -> Int)), [a]
-          12 -> undefined
-          _ -> undefined
-
-instance Rando (Expr '[] Bool) where
-    rando 0 = bB <$> getRandom
-    rando d = do
-      c <- getRandomR (0, 13 :: Int)
-      case c of
-        0 -> bB <$> getRandom
-        1 -> not' <$> rando (d - 1)
-        -- fst -- (Bool, a)
-        2 -> undefined
-        -- snd -- (a, Bool)
-        3 -> undefined
-        4 -> (~<=) <$> rando (d - 1) <*> rando (d - 1)
-        5 -> (~<) <$> rando (d - 1) <*> rando (d - 1)
-        6 -> (~==) <$> rando (d - 1) <*> rando (d - 1)
-        7 -> (~&&) <$> rando (d - 1) <*> rando (d - 1)
-        8 -> (~||) <$> rando (d - 1) <*> rando (d - 1)
-        9 -> xor' <$> rando (d - 1) <*> rando (d - 1)
-        -- ap -- (a -> Bool), a
-        10 -> undefined
-        11 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
-        -- case -- Either a b, a -> Bool, b -> Bool
-        12 -> undefined
-        -- foldr -- (a -> (Bool -> Bool)), [a]
-        13 -> undefined
-        _ -> undefined
-
-instance (Rando (Expr '[] a), Rando (Expr '[] b)) => Rando (Expr '[] (a, b)) where
-    rando 0 = tup' <$> rando 0 <*> rando 0
-    rando d = do
-      c <- getRandomR (0, 4 :: Int)
-      case c of
-        0 -> tup' <$> rando (d - 1) <*> rando (d - 1)
-        -- ap -- (a -> (b, c)), a
-        1 -> undefined
-        2 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
-        -- case -- Either a b, (a -> (c, d)), (b -> (c, d))
-        3 -> undefined
-        -- foldr -- (a -> (b, c) -> (b, c)), [a], (b, c)
-        4 -> undefined
-        _ -> undefined
-
-
-instance (Rando (Expr '[] a), Rando (Expr '[] b)) => Rando (Expr '[] (Either a b)) where
-    rando 0 = do
-      b <- getRandom
-      if b
-        then left' <$> rando 0
-        else right' <$> rando 0
-    rando d = do
-        c <- getRandomR (0, 4 :: Int)
-        case c of
-          0 -> left' <$> rando (d - 1)
-          1 -> right' <$> rando (d - 1)
-          -- ap -- (a -> Either b c), a
-          2 -> undefined
-          3 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
-          -- case -- (a -> Either c d), (b -> Either c d)
-          4 -> undefined
-          -- foldr -- (a -> Either b c -> Either b c), [a], Either b c
-          5 -> undefined
-          _ -> undefined
-
-instance Rando (Expr '[] a) => Rando (Expr '[] [a]) where
-    rando 0 = return nil'
-    rando d = do
-        c <- getRandomR (0, 9 :: Int)
-        case c of
-          0 -> return nil'
-          1 -> (~:) <$> rando (d - 1) <*> rando (d - 1)
-          -- ap -- (a -> Either b c), a
-          2 -> undefined
-          3 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
-          -- case -- (a -> [c]), (b -> [c])
-          4 -> undefined
-          -- unfoldrN -- (a -> (b, a)), a
-          5 -> undefined
-          -- foldr -- (a -> [b] -> [b]), [a], [b]
-          6 -> undefined
-          -- map -- [a]
-          7 -> undefined
-          -- mapMaybe -- (a -> Maybe b), [a]
-          8 -> undefined
-          -- filter (a -> Bool)
-          9 -> undefined
-          _ -> undefined
-
-
---     V        :: Indexor vs a                   -> Expr vs a
---     O0       :: Op0 a                          -> Expr vs a
---     O1       :: O (Op1 a b)     (Op1' a b)     -> Expr vs a             -> Expr vs b
---     O2       :: O (Op2 a b c)   (Op2' a b c)   -> Expr vs a             -> Expr vs b        -> Expr vs c
---     O3       :: O (Op3 a b c d) (Op3' a b c d) -> Expr vs a             -> Expr vs b        -> Expr vs c   -> Expr vs d
---     Lambda   :: Expr (a ': vs) b               -> Expr vs (a -> b)
--- data O :: * -> * -> * where
---     Con :: a -> O a b
---     Dec :: b -> O a b
---   deriving Show
-
--- data Op0 :: * -> * where
---     I :: Int -> Op0 Int
---     B :: Bool -> Op0 Bool
---     Nil :: Op0 [a]
---     Unit :: Op0 ()
-
--- data Op1 :: * -> * -> * where
---     Abs    :: Op1 Int Int
---     Signum :: Op1 Int Int
---     Not    :: Op1 Bool Bool
---     Left'  :: Op1 a (Either a b)
---     Right' :: Op1 b (Either a b)
-
--- data Op1' :: * -> * -> * where
---     Fst    :: Op1' (a, b) a
---     Snd    :: Op1' (a, b) b
-
--- data Op2 :: * -> * -> * -> * where
---     Plus    :: Op2 Int Int Int
---     Times   :: Op2 Int Int Int
---     Minus   :: Op2 Int Int Int
---     Div     :: Op2 Int Int Int
---     Mod     :: Op2 Int Int Int
---     LEquals :: Op2 Int Int Bool
---     And     :: Op2 Bool Bool Bool
---     Or      :: Op2 Bool Bool Bool
---     Tup     :: Op2 a b (a, b)
---     Cons    :: Op2 a [a] [a]
-
--- data Op2' :: * -> * -> * -> * where
---     Ap       :: Op2' (a -> b) a b
-
--- data Op3 :: * -> * -> * -> * -> *
-
--- data Op3' :: * -> * -> * -> * -> * where
---     If       :: Op3' Bool a a a
---     Case     :: Op3' (Either a b) (a -> c) (b -> c) c
---     UnfoldrN :: Op3' Int (a -> (b, a)) a [b]
---     Foldr    :: Op3' (a -> b -> b) b [a] b
