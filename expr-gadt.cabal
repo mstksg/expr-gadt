@@ -21,7 +21,7 @@ library
                        Data.ExprGADT.Types
                        Data.ExprGADT.Eval
                        Data.ExprGADT.Generate
-                       Data.ExprGADT.Lenses
+                       Data.ExprGADT.Traversals
                        Data.Rando
   -- other-modules:       
   -- other-extensions:    

@@ -50,11 +50,26 @@ reduceWith :: forall vs us o. (forall v. Indexor vs v -> Expr us v) -> Expr vs o
 reduceWith f = runIdentity . reduceWithA (Identity . f)
 
 reduceWithA :: forall vs us o f. Applicative f => (forall v. Indexor vs v -> f (Expr us v)) -> Expr vs o -> f (Expr us o)
-reduceWithA f = go
+reduceWithA f = reduceWithA' (f' f)
+  where
+    f' :: forall u vs us. (forall v. Indexor vs v -> f (Expr us v)) -> Expr vs u -> f (Expr us u)
+    f' f0 = go
+      where
+        go :: forall q. Expr vs q -> f (Expr us q)
+        go e = case e of
+                 V ix -> f0 ix
+                 O0 o -> pure $ O0 o
+                 O1 o e1 -> O1 o <$> go e1
+                 O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+                 O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+                 Lambda ef -> Lambda <$> f' undefined ef
+
+reduceWithA' :: forall vs us o f. Applicative f => (forall v. Expr vs v -> f (Expr us v)) -> Expr vs o -> f (Expr us o)
+reduceWithA' f = go
   where
     go :: Expr vs a -> f (Expr us a)
     go e = case e of
-             V ix              -> f ix
+             V ix              -> f (V ix)
              O0 o              -> pure $ O0 o
              O1 o e1           -> case o of
                                     Con o'     -> case e1 of
@@ -121,14 +136,32 @@ reduceWithA f = go
                                                               ~$ foldr' ef ez eys
                               _                    -> foldr' <$> go ef <*> go ez <*> go exs
     go' :: forall d a. Expr (d ': vs) a -> f (Expr (d ': us) a)
-    go' = reduceWithA f'
+    go' = reduceWithA' f'
       where
-        f' :: forall k. Indexor (d ': vs) k  -> f (Expr (d ': us) k)
-        f' IZ      = pure $ V IZ
-        f' (IS ix) = shuffleVars IS <$> f ix
+        f' :: forall k. Expr (d ': vs) k  -> f (Expr (d ': us) k)
+        f' (V ix) = case ix of
+                      IZ -> pure $ V IZ
+                      IS ix' -> shuffleVars IS <$> f (V ix')
+        f' e      = go' e
+        -- f' (IS ix) = shuffleVars IS <$> f ix
 
-shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
-shuffleVars f = reduceWith (V . f)
+shuffleVars :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
+shuffleVars f = runIdentity . shuffleVarsA (pure . f)
+
+shuffleVarsA :: forall ks js a f. Applicative f => (forall k. Indexor ks k -> f (Indexor js k)) -> Expr ks a -> f (Expr js a)
+shuffleVarsA f = go
+  where
+    go :: forall b. Expr ks b -> f (Expr js b)
+    go e = case e of
+             V ix -> V <$> f ix
+             O0 o -> pure $ O0 o
+             O1 o e1 -> O1 o <$> go e1
+             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+             Lambda ef -> Lambda <$> shuffleVarsA f' ef
+    f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
+    f' IZ      = pure IZ
+    f' (IS ix) = IS <$> f ix
 
 -- will this be good enough for monomorphic cases?
 -- might have to resort to doing something with Proxy and letting people
