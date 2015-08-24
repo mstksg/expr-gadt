@@ -6,6 +6,7 @@ module Data.ExprGADT.Generate where
 import Control.Monad.Random
 import Data.ExprGADT.Types
 import Data.ExprGADT.Expr
+import Data.ExprGADT.Eval
 import Control.Monad
 
 type ExprGenerator m vs a = Int -> m (Expr vs a)
@@ -85,6 +86,8 @@ listGenerators t d = (return nil', 0.1)
            , (filter' <$> undefined <*> generateList           , 0)
            , ((~++) <$> generateList <*> generateList          , 1)
            , (take' <$> (abs <$> generateInt) <*> generateList , 1)
+           , (unfoldrN' <$> generateInt <*> undefined <*> undefined, 0)
+           , (unfoldrNUntil' <$> generateInt <*> undefined <*> undefined, 0)
            ]
     generateX    = genFromEType t (d - 1)
     generateList = genFromEType (EList t) (d - 1)
@@ -113,6 +116,81 @@ eitherGenerators t1 t2 d = gens
     generateInt = genFromEType EInt (d - 1)
     generateX   = genFromEType t1 (d - 1)
     generateY   = genFromEType t2 (d - 1)
+
+int2IntGenerators :: MonadRandom m => ExprGenerators m vs (Int -> Int)
+int2IntGenerators d = gens
+  where
+    gens = [ (return $ λ .-> abs (V IZ), 1)
+           , (return $ λ .-> signum (V IZ), 1)
+           , (λ . (+ V IZ) <$> generateInt, 1)
+           , (λ . (* V IZ) <$> generateInt, 1)
+           , (λ . subtract (V IZ) <$> generateInt, 1)
+           , (λ . (V IZ -) <$> generateInt, 1)
+           ]
+    generateInt = genFromEType EInt (d - 1)
+
+int2BoolGenerators :: MonadRandom m => ExprGenerators m vs (Int -> Bool)
+int2BoolGenerators d = gens
+  where
+    gens = [ (λ . (`divides'` V IZ) <$> generateInt, 1)
+           , (λ . (V IZ `divides'`) <$> generateInt, 1)
+           , (λ . (V IZ ~<=) <$> generateInt, 1)
+           , (λ . (V IZ ~<) <$> generateInt, 1)
+           , (λ . (V IZ ~==) <$> generateInt, 1)
+           ]
+    generateInt = genFromEType EInt (d - 1)
+
+bool2BoolGenerators :: MonadRandom m => ExprGenerators m vs (Bool -> Bool)
+bool2BoolGenerators d = gens
+  where
+    gens = [ (return $ λ .-> not' (V IZ), 1)
+           , (λ . (V IZ ~&&) <$> generateBool, 1)
+           , (λ . (V IZ ~||) <$> generateBool, 1)
+           , (λ . xor' (V IZ) <$> generateBool, 1)
+           ]
+    generateBool = genFromEType EBool (d - 1)
+
+int2ListGenerators :: MonadRandom m => EType a -> ExprGenerators m vs (Int -> [a])
+int2ListGenerators t d = gens
+  where
+    gens = [ (λ . take' (abs (V IZ)) <$> generateList, 1)
+           , ((\f z -> λ .-> unfoldrN' (V IZ) f z) <$> undefined <*> undefined, 0)
+           , ((\f z -> λ .-> unfoldrNUntil' (V IZ) f z) <$> undefined <*> undefined, 0)
+           ]
+    generateList = genFromEType (EList t) (d - 1)
+
+bool2AnyGenerators :: MonadRandom m => EType a -> ExprGenerators m vs (Bool -> a)
+bool2AnyGenerators t d = [ (gen, 1) ]
+  where
+    gen = do
+      x <- genFromEType t (d - 1)
+      y <- genFromEType t (d - 1)
+      return $ λ .-> if' (V IZ) x y
+
+any2TupleGenerators :: MonadRandom m => EType a -> EType b -> EType c -> ExprGenerators m vs (a -> (b, c))
+any2TupleGenerators t1 t2 t3 d = [(gen, 1)]
+  where
+    gen = do
+      f <- genFromEType (EFunc t1 t2) (d - 1)
+      g <- genFromEType (EFunc t1 t3) (d - 1)
+      return $ λ .-> tup' (f ~$ V IZ) (g ~$ V IZ)
+
+either2AnyGenerators :: MonadRandom m => EType a -> EType b -> EType c -> ExprGenerators m vs (Either a b -> c)
+either2AnyGenerators t1 t2 t3 d = [ (gen, 1) ]
+  where
+    gen = do
+      f <- genFromEType (EFunc t1 t3) (d - 1)
+      g <- genFromEType (EFunc t2 t3) (d - 1)
+      return $ λ .-> case' (V IZ) f g
+
+
+    -- gens = [ ((~:) <$> generateX <*> generateList              , 1)
+    --        , (map' <$> undefined <*> undefined                 , 0)
+    --        , (mapMaybe' <$> undefined <*> undefined            , 0)
+    --        , (filter' <$> undefined <*> generateList           , 0)
+    --        , ((~++) <$> generateList <*> generateList          , 1)
+    --        , (take' <$> (abs <$> generateInt) <*> generateList , 1)
+    --        ]
 
 -- generateFunc :: forall a b vs m. MonadRandom m => EType (a -> b) -> ExprGenerator m vs (a -> b)
 -- generateFunc e d = case e of
