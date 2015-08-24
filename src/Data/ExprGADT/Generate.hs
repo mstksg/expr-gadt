@@ -1,5 +1,5 @@
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Data.ExprGADT.Generate where
 
@@ -73,28 +73,108 @@ generateList :: MonadRandom m => ExprGenerator m vs a -> ExprGenerator m vs [a]
 generateList gx d | d <= 0    = return nil'
                   | otherwise = join (fromList gens)
   where
-    gens = [ (return nil'                                          , 0.1)
-           , ((~:) <$> gx' <*> generateList'                       , 1)
-           , ((~$) <$> undefined <*> undefined                     , 0)
-           , (generateIf (generateList gx) d                       , 1)
-           , (case' <$> undefined <*> undefined <*> undefined      , 0)
-           , (foldr' <$> undefined <*> generateList' <*> undefined , 0)
-           , (unfoldrN' <$> generateInt (d - 1) <*> undefined <*> undefined, 0)
-           , (map' <$> undefined <*> undefined, 0)
-           , (mapMaybe' <$> undefined <*> undefined, 0)
-           , (filter' <$> undefined <*> undefined, 0)
+    gens = [ (return nil'                                                   , 0.01)
+           , ((~:) <$> gx' <*> generateList'                                , 1)
+           , ((~$) <$> undefined <*> undefined                              , 0)
+           , (generateIf (generateList gx) d                                , 1)
+           , (case' <$> undefined <*> undefined <*> undefined               , 0)
+           , (foldr' <$> undefined <*> generateList' <*> undefined          , 0)
+           , (unfoldrN' <$> generateInt (d - 1) <*> undefined <*> undefined , 0)
+           , (map' <$> undefined <*> undefined                              , 0)
+           , (mapMaybe' <$> undefined <*> undefined                         , 0)
+           , (filter' <$> undefined <*> undefined                           , 0)
+           , ((~++) <$> generateList' <*> generateList'                     , 1)
+           , (take' <$> (abs <$> generateInt (d - 1)) <*> generateList'     , 1)
            ]
     gx'           = gx (d - 1)
     generateList' = generateList gx (d - 1)
 
--- data EType :: * -> * where
---   EInt :: EType Int
---   EBool :: EType Bool
---   EUnit :: EType ()
---   ETup :: EType a -> EType b -> EType (a, b)
---   EEither :: EType a -> EType b -> EType (Either a b)
---   EFunc :: EType a -> EType b -> EType (a -> b)
---   EList :: EType a -> EType [a]
+generateTuple :: MonadRandom m
+              => ExprGenerator m vs a
+              -> ExprGenerator m vs b
+              -> ExprGenerator m vs (a, b)
+generateTuple gx gy d | d <= 0    = tup' <$> gx 0 <*> gy 0
+                      | otherwise = join (fromList gens)
+  where
+    gens = [ (tup' <$> gx' <*> gy'                                  , 1)
+           , ((~$) <$> undefined <*> undefined                      , 0)
+           , (generateIf (generateTuple gx gy) d                    , 1)
+           , (case' <$> undefined <*> undefined <*> undefined       , 0)
+           , (foldr' <$> undefined <*> generateTuple' <*> undefined , 0)
+           ]
+    gx' = gx (d - 1)
+    gy' = gy (d - 1)
+    generateTuple' = generateTuple gx gy (d - 1)
+
+-- what about cases for div, mod?
+generateEither :: MonadRandom m
+               => ExprGenerator m vs a
+               -> ExprGenerator m vs b
+               -> ExprGenerator m vs (Either a b)
+generateEither gx gy d | d <= 0    = join . fromList $ [ (left' <$> gx 0 , 1)
+                                                       , (right' <$> gy 0, 1)
+                                                       ]
+                       | otherwise = join (fromList gens)
+  where
+    gens = [ (left' <$> gx'                                          , 1)
+           , (right' <$> gy'                                         , 1)
+           , ((~$) <$> undefined <*> undefined                       , 0)
+           , (generateIf (generateEither gx gy) d                    , 1)
+           , (case' <$> undefined <*> undefined <*> undefined        , 0)
+           , (foldr' <$> undefined <*> generateEither' <*> undefined , 0)
+           ]
+    gx' = gx (d - 1)
+    gy' = gy (d - 1)
+    generateEither' = generateEither gx gy (d - 1)
+
+generateFunc :: forall a b vs m. MonadRandom m => EType (a -> b) -> ExprGenerator m vs (a -> b)
+generateFunc e d = case e of
+    EFunc EInt EInt   -> fromList' e [ (return id', 1)
+                                     , (return $ λ .-> abs (V IZ), 1)
+                                     , (return $ λ .-> signum (V IZ), 1)
+                                     , (λ . (+ V IZ) <$> generateInt d', 1)
+                                     , (λ . (* V IZ) <$> generateInt d', 1)
+                                     , (λ . subtract (V IZ) <$> generateInt d', 1)
+                                     , (λ . (V IZ -) <$> generateInt d', 1)
+                                     ]
+    EFunc EInt EBool  -> fromList' e [ (λ . (`divides'` V IZ) <$> generateInt d', 1)
+                                     , (λ . (V IZ `divides'`) <$> generateInt d', 1)
+                                     , (λ . (V IZ ~<=) <$> generateInt d', 1)
+                                     , (λ . (V IZ ~<) <$> generateInt d', 1)
+                                     , (λ . (V IZ ~==) <$> generateInt d', 1)
+                                     -- okay
+                                     , ((~.) <$> generateFunc e d' <*> generateFunc (EFunc EInt EInt) d', 1)
+                                     ]
+    EFunc EBool EBool -> fromList' e [ (return id', 1)
+                                     , (return $ λ .-> not' (V IZ), 1)
+                                     , (λ . (V IZ ~&&) <$> generateBool d', 1)
+                                     , (λ . (V IZ ~||) <$> generateBool d', 1)
+                                     , (λ . xor' (V IZ) <$> generateBool d', 1)
+                                     ]
+    EFunc EBool y     -> fromList' e [ ((\t f -> λ .-> if' (V IZ) t f) <$> genFromEType y d' <*> genFromEType y d', 1) ]
+    EFunc a (EEither a b) -> undefined
+  where
+    fromList' :: forall c d. EType (c -> d) -> [(m (Expr vs (c -> d)), Rational)] -> m (Expr vs (c -> d))
+    fromList' t gens = join . fromList $ gens0 t ++ gens
+    gens0 :: forall c d. EType (c -> d) -> [(m (Expr vs (c -> d)), Rational)]
+    gens0 t@(EFunc _ y) = [ (const' <$> genFromEType y d', 1)
+                          , (generateIf (generateFunc t) d, 1)
+                          , (case' <$> undefined <*> undefined <*> undefined, 0)
+                          , (foldr' <$> undefined <*> generateFunc t d' <*> undefined, 0)
+                          ]
+    d' = max 0 (d - 1)
+
+-- generateIntToInt :: MonadRandom m => ExprGenerator m vs (Int -> Int)
+-- generateIntToInt d | d <= 0    = join . fromList $ [ (return $ λ .-> V IZ, 1)
+--                                                    , (λ <$> generateInt 0, 1)
+--                                                    ]
+--                    | otherwise = join (fromList gens)
+--   where
+--     gens = [ (return $ λ .-> V IZ, 1)
+--            , (λ <$> generateInt (d - 1), 1)
+--            , ((\i -> λ .-> i + V IZ) <$> generateInt (d - 1), 1)
+--            , ((\i -> λ .-> i * V IZ) <$> generateInt (d - 1), 1)
+--            ]
 
 generateETypeW :: MonadRandom m => Int -> m ETypeW
 generateETypeW d | d <= 0    = join (fromList gens0)
@@ -112,101 +192,16 @@ generateETypeW d | d <= 0    = join (fromList gens0)
             ]
     generateETypeW' = generateETypeW (d - 1)
 
--- generateExprW :: MonadRandom m => Int -> m ExprW
--- generateExprW d = do
---     etw <- generateETypeW 2
---     undefined
+generateExprW :: MonadRandom m => Int -> m ExprW
+generateExprW d = do
+    ETW t <- generateETypeW 2
+    EW t <$> genFromEType t d
 
--- genFromEType :: MonadRandom m => EType a -> ExprGenerator m vs a
--- genFromEType EInt = generateInt
--- genFromEType EBool = generateBool
--- genFromEType EUnit = generateUnit
--- -- genFromEType (ETup a b) =
-
-
--- instance Rando (Expr '[] Int) where
---     rando 0 = iI <$> getRandomR (-10,10)
---     rando d = do
---         c <- getRandomR (0, 12 :: Int)
---         case c of
---           0 -> iI <$> getRandomR (-10, 10)
---           1 -> abs <$> rando (d - 1)
---           2 -> signum <$> rando (d - 1)
---           -- fst -- (Int, a)
---           3 -> undefined
---           -- snd -- (a, Int)
---           4 -> undefined
---           5 -> (+) <$> rando (d - 1) <*> rando (d - 1)
---           6 -> (*) <$> rando (d - 1) <*> rando (d - 1)
---           -- 7 -> div' <$> rando (d - 1) <*> rando (d - 1)
---           -- 8 -> mod' <$> rando (d - 1) <*> rando (d - 1)
---           -- ap -- (a -> Int), a
---           9 -> undefined
---           10 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
---           -- case -- Either a b, (a -> Int), (b -> Int)
---           11 -> undefined
---           -- foldr -- (a -> (Int -> Int)), [a]
---           12 -> undefined
---           _ -> undefined
-
--- instance Rando (Expr '[] Bool) where
---     rando 0 = bB <$> getRandom
---     rando d = do
---       c <- getRandomR (0, 13 :: Int)
---       case c of
---         0 -> bB <$> getRandom
---         1 -> not' <$> rando (d - 1)
---         -- fst -- (Bool, a)
---         2 -> undefined
---         -- snd -- (a, Bool)
---         3 -> undefined
---         4 -> (~<=) <$> rando (d - 1) <*> rando (d - 1)
---         5 -> (~<) <$> rando (d - 1) <*> rando (d - 1)
---         6 -> (~==) <$> rando (d - 1) <*> rando (d - 1)
---         7 -> (~&&) <$> rando (d - 1) <*> rando (d - 1)
---         8 -> (~||) <$> rando (d - 1) <*> rando (d - 1)
---         9 -> xor' <$> rando (d - 1) <*> rando (d - 1)
---         -- ap -- (a -> Bool), a
---         10 -> undefined
---         11 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
---         -- case -- Either a b, a -> Bool, b -> Bool
---         12 -> undefined
---         -- foldr -- (a -> (Bool -> Bool)), [a]
---         13 -> undefined
---         _ -> undefined
-
--- instance (Rando (Expr '[] a), Rando (Expr '[] b)) => Rando (Expr '[] (a, b)) where
---     rando 0 = tup' <$> rando 0 <*> rando 0
---     rando d = do
---       c <- getRandomR (0, 4 :: Int)
---       case c of
---         0 -> tup' <$> rando (d - 1) <*> rando (d - 1)
---         -- ap -- (a -> (b, c)), a
---         1 -> undefined
---         2 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
---         -- case -- Either a b, (a -> (c, d)), (b -> (c, d))
---         3 -> undefined
---         -- foldr -- (a -> (b, c) -> (b, c)), [a], (b, c)
---         4 -> undefined
---         _ -> undefined
-
-
--- instance (Rando (Expr '[] a), Rando (Expr '[] b)) => Rando (Expr '[] (Either a b)) where
---     rando 0 = do
---       b <- getRandom
---       if b
---         then left' <$> rando 0
---         else right' <$> rando 0
---     rando d = do
---         c <- getRandomR (0, 4 :: Int)
---         case c of
---           0 -> left' <$> rando (d - 1)
---           1 -> right' <$> rando (d - 1)
---           -- ap -- (a -> Either b c), a
---           2 -> undefined
---           3 -> if' <$> rando (d - 1) <*> rando (d - 1) <*> rando (d - 1)
---           -- case -- (a -> Either c d), (b -> Either c d)
---           4 -> undefined
---           -- foldr -- (a -> Either b c -> Either b c), [a], Either b c
---           5 -> undefined
---           _ -> undefined
+genFromEType :: MonadRandom m => EType a -> ExprGenerator m vs a
+genFromEType EInt = generateInt
+genFromEType EBool = generateBool
+genFromEType EUnit = generateUnit
+genFromEType (EList x) = generateList (genFromEType x)
+genFromEType (ETup x y) = generateTuple (genFromEType x) (genFromEType y)
+genFromEType (EEither x y) = generateEither (genFromEType x) (genFromEType y)
+genFromEType (EFunc _ _) = undefined

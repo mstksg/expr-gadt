@@ -86,7 +86,7 @@ data EType :: * -> * where
   EList :: EType a -> EType [a]
 
 data ExprW :: * where
-    EW :: EType a -> Expr vs a -> ExprW
+    EW :: EType a -> Expr '[] a -> ExprW
 
 data ETypeW :: * where
     ETW :: EType a -> ETypeW

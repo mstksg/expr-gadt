@@ -69,6 +69,9 @@ sum' = foldr' (λ .-> λ .-> V IZ + V (IS IZ)) 0
 even' :: Expr vs Int -> Expr vs Bool
 even' ex = maybe' false' (λ .-> V IZ ~== 0) (ex `mod'` 2)
 
+divides' :: Expr vs Int -> Expr vs Int -> Expr vs Bool
+divides' ex ey = maybe' false' (λ .-> V IZ ~== 0) (ex `mod'` ey)
+
 curry' :: Expr vs ((a, b) -> c) -> Expr vs (a -> b -> c)
 curry' ef = λ .-> λ .-> pushInto ef ~$ tup' (V (IS IZ)) (V IZ)
 
