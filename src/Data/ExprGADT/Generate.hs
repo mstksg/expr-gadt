@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 
 module Data.ExprGADT.Generate where
 
@@ -8,24 +9,34 @@ import Data.ExprGADT.Types
 import Data.ExprGADT.Expr
 import Control.Monad
 
-type ExprGenerator m vs a = Int -> m (Expr vs a)
+type ExprGenerator m vs a    = Int -> m (Expr vs a)
+type ExprGenerators m vs a   = Int -> [(m (Expr vs a), Rational)]
+type ExprGeneratorIndex m vs = forall a. EType a -> ExprGenerator m vs a
 
-type ExprGenerators m vs a = Int -> [(m (Expr vs a), Rational)]
+-- genFromEType :: MonadRandom m => EType a -> ExprGenerator m vs a
+genFromEType :: MonadRandom m => ExprGeneratorIndex m vs
+genFromEType = indexFromGens etGenerators
 
-genFromEType :: MonadRandom m => EType a -> ExprGenerator m vs a
-genFromEType e = join . fromList . etGenerators e
+indexFromGens :: MonadRandom m
+              => (forall a. EType a -> ExprGenerators m vs a)
+              -> ExprGeneratorIndex m vs
+indexFromGens gens e = join . fromList . gens e
 
 etGenerators :: forall m vs a. MonadRandom m => EType a -> ExprGenerators m vs a
 etGenerators t = do
     pGens <- polyGenerators t
     tGens <- case t of
-               EInt          -> concat <$> sequence [intGenerators]
-               EBool         -> concat <$> sequence [boolGenerators]
-               EUnit         -> concat <$> sequence [unitGenerators]
-               EList t1      -> concat <$> sequence [listGenerators t1]
-               ETup t1 t2    -> concat <$> sequence [tupleGenerators t1 t2]
-               EEither t1 t2 -> concat <$> sequence [eitherGenerators t1 t2]
+               EInt          -> concat <$> sequence [intGenerators gix]
+               EBool         -> concat <$> sequence [boolGenerators gix]
+               EUnit         -> concat <$> sequence [unitGenerators gix]
+               EList t1      -> concat <$> sequence [listGenerators gix t1]
+               ETup t1 t2    -> concat <$> sequence [tupleGenerators gix t1 t2]
+               EEither t1 t2 -> concat <$> sequence [eitherGenerators gix t1 t2]
+               EFunc _ _     -> undefined
     return (pGens ++ tGens)
+  where
+    gix :: ExprGeneratorIndex m vs
+    gix = genFromEType
 
 polyGenerators :: MonadRandom m => EType a -> ExprGenerators m vs a
 polyGenerators t d = [ (fst' <$> undefined                               , 0)
@@ -39,9 +50,11 @@ polyGenerators t d = [ (fst' <$> undefined                               , 0)
     generateBool = genFromEType EBool (d - 1)
     generateX    = genFromEType t (d - 1)
 
-intGenerators :: MonadRandom m => ExprGenerators m vs Int
-intGenerators d = (iI <$> getRandomR (-20, 20), 1)
-                : if d > 0 then gens else []
+intGenerators :: MonadRandom m
+              => ExprGeneratorIndex m vs
+              -> ExprGenerators m vs Int
+intGenerators gix d = (iI <$> getRandomR (-20, 20), 1)
+                    : if d > 0 then gens else []
   where
     gens = [ (abs <$> generateInt                                , 1)
            , (signum <$> generateInt                             , 1)
@@ -51,11 +64,13 @@ intGenerators d = (iI <$> getRandomR (-20, 20), 1)
            , ((*) <$> generateInt <*> generateInt                , 1)
            , ((-) <$> generateInt <*> generateInt                , 1)
            ]
-    generateInt = genFromEType EInt (d - 1)
+    generateInt = gix EInt (d - 1)
 
-boolGenerators :: MonadRandom m => ExprGenerators m vs Bool
-boolGenerators d = (bB <$> getRandom, 1)
-                 : if d > 0 then gens else []
+boolGenerators :: MonadRandom m
+               => ExprGeneratorIndex m vs
+               -> ExprGenerators m vs Bool
+boolGenerators gix d = (bB <$> getRandom, 1)
+                     : if d > 0 then gens else []
   where
     gens = [ (not' <$> generateBool                              , 1)
            , ((~<=) <$> generateInt <*> generateInt              , 1)
@@ -65,19 +80,24 @@ boolGenerators d = (bB <$> getRandom, 1)
            , ((~||) <$> generateBool <*> generateBool            , 1)
            , (xor' <$> generateBool <*> generateBool             , 1)
            ]
-    generateBool = genFromEType EBool (d - 1)
-    generateInt  = genFromEType EInt (d - 1)
+    generateBool = gix EBool (d - 1)
+    generateInt  = gix EInt (d - 1)
 
 -- -- this is kind of silly, heh
-unitGenerators :: MonadRandom m => ExprGenerators m vs ()
-unitGenerators d = (return unit', 1)
-                 : if d > 0 then gens else []
+unitGenerators :: MonadRandom m
+               => ExprGeneratorIndex m vs
+               -> ExprGenerators m vs ()
+unitGenerators _ d = (return unit', 1)
+                   : if d > 0 then gens else []
   where
     gens = []
 
-listGenerators :: MonadRandom m => EType a -> ExprGenerators m vs [a]
-listGenerators t d = (return nil', 0.1)
-                   : if d > 0 then gens else []
+listGenerators :: MonadRandom m
+               => ExprGeneratorIndex m vs
+               -> EType a
+               -> ExprGenerators m vs [a]
+listGenerators gix t d = (return nil', 0.1)
+                       : if d > 0 then gens else []
   where
     gens = [ ((~:) <$> generateX <*> generateList              , 1)
            , (map' <$> undefined <*> undefined                 , 0)
@@ -86,22 +106,30 @@ listGenerators t d = (return nil', 0.1)
            , ((~++) <$> generateList <*> generateList          , 1)
            , (take' <$> (abs <$> generateInt) <*> generateList , 1)
            ]
-    generateX    = genFromEType t (d - 1)
-    generateList = genFromEType (EList t) (d - 1)
-    generateInt  = genFromEType EInt (d - 1)
+    generateX    = gix t (d - 1)
+    generateList = gix (EList t) (d - 1)
+    generateInt  = gix EInt (d - 1)
 
-tupleGenerators :: MonadRandom m => EType a -> EType b -> ExprGenerators m vs (a, b)
-tupleGenerators t1 t2 d = gens
+tupleGenerators :: MonadRandom m
+                => ExprGeneratorIndex m vs
+                -> EType a
+                -> EType b
+                -> ExprGenerators m vs (a, b)
+tupleGenerators gix t1 t2 d = gens
   where
     gens = [ (tup' <$> generateX <*> generateY, 1) ]
-    generateX = genFromEType t1 (d - 1)
-    generateY = genFromEType t2 (d - 1)
+    generateX = gix t1 (d - 1)
+    generateY = gix t2 (d - 1)
 
-eitherGenerators :: forall m vs a b. MonadRandom m => EType a -> EType b -> ExprGenerators m vs (Either a b)
-eitherGenerators t1 t2 d = gens
-                        ++ case (t1, t2) of
-                             (EUnit, EInt) -> gensInt
-                             _             -> []
+eitherGenerators :: forall m vs a b. MonadRandom m
+                 => ExprGeneratorIndex m vs
+                 -> EType a
+                 -> EType b
+                 -> ExprGenerators m vs (Either a b)
+eitherGenerators gix t1 t2 d = gens
+                            ++ case (t1, t2) of
+                                 (EUnit, EInt) -> gensInt
+                                 _             -> []
   where
     gens = [ (left' <$> generateX , 1)
            , (right' <$> generateY, 1)
@@ -110,9 +138,10 @@ eitherGenerators t1 t2 d = gens
     gensInt = [ (div' <$> generateInt <*> generateInt, 1 )
               , (mod' <$> generateInt <*> generateInt, 1 )
               ]
-    generateInt = genFromEType EInt (d - 1)
-    generateX   = genFromEType t1 (d - 1)
-    generateY   = genFromEType t2 (d - 1)
+    generateInt = gix EInt (d - 1)
+    generateX   = gix t1 (d - 1)
+    generateY   = gix t2 (d - 1)
+
 
 -- generateFunc :: forall a b vs m. MonadRandom m => EType (a -> b) -> ExprGenerator m vs (a -> b)
 -- generateFunc e d = case e of
