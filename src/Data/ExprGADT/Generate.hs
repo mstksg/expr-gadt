@@ -183,7 +183,6 @@ either2AnyGenerators t1 t2 t3 d = [ (gen, 1) ]
       g <- genFromEType (EFunc t2 t3) (d - 1)
       return $ λ .-> case' (V IZ) f g
 
-
     -- gens = [ ((~:) <$> generateX <*> generateList              , 1)
     --        , (map' <$> undefined <*> undefined                 , 0)
     --        , (mapMaybe' <$> undefined <*> undefined            , 0)

@@ -9,7 +9,7 @@
 
 module Data.ExprGADT.Eval where
 
-import Debug.Trace
+import Data.Functor.Identity
 import Data.ExprGADT.Types
 import Data.List (unfoldr)
 
@@ -47,26 +47,29 @@ reduce :: Expr vs a -> Expr vs a
 reduce = reduceWith V
 
 reduceWith :: forall vs us o. (forall v. Indexor vs v -> Expr us v) -> Expr vs o -> Expr us o
-reduceWith f = go
+reduceWith f = runIdentity . reduceWithA (Identity . f)
+
+reduceWithA :: forall vs us o f. Applicative f => (forall v. Indexor vs v -> f (Expr us v)) -> Expr vs o -> f (Expr us o)
+reduceWithA f = go
   where
-    go :: Expr vs a -> Expr us a
+    go :: Expr vs a -> f (Expr us a)
     go e = case e of
              V ix              -> f ix
-             O0 o              -> O0 o
+             O0 o              -> pure $ O0 o
              O1 o e1           -> case o of
                                     Con o'     -> case e1 of
                                                     O0 o'' -> case op1_ o' (op0 o'') of
-                                                                Just x -> O0 x
-                                                                _      -> O1 o (go e1)
-                                                    _      -> O1 o (go e1)
+                                                                Just x -> pure $ O0 x
+                                                                _      -> O1 o <$> go e1
+                                                    _      -> O1 o <$> go e1
                                     Dec Fst    -> reduceFst e1
                                     Dec Snd    -> reduceSnd e1
              O2 o e1 e2        -> case o of
                                     Con o' -> case (e1, e2) of
                                                 (O0 o''1, O0 o''2) -> case op2_ o' (op0 o''1) (op0 o''2) of
-                                                                        Just x -> O0 x
-                                                                        _      -> O2 o (go e1) (go e2)
-                                                _           -> O2 o (go e1) (go e2)
+                                                                        Just x -> pure $ O0 x
+                                                                        _      -> O2 o <$> go e1 <*> go e2
+                                                _           -> O2 o <$> go e1 <*> go e2
                                     Dec Ap -> reduceAp e1 e2
              O3 o e1 e2 e3     -> case o of
                                     Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
@@ -74,55 +77,55 @@ reduceWith f = go
                                     Dec Case     -> reduceCase e1 e2 e3
                                     Dec UnfoldrN -> reduceUnfoldrN e1 e2 e3
                                     Dec Foldr    -> reduceFoldr e1 e2 e3
-             Lambda eλ         -> Lambda (go' eλ)
-    reduceFst :: Expr vs (a, b) -> Expr us a
+             Lambda eλ         -> Lambda <$> go' eλ
+    reduceFst :: Expr vs (a, b) -> f (Expr us a)
     reduceFst e' = case e' of
                      O2 (Con Tup) e1 _ -> go e1
-                     _                 -> fst' (go e')
-    reduceSnd :: Expr vs (a, b) -> Expr us b
+                     _                 -> fst' <$> go e'
+    reduceSnd :: Expr vs (a, b) -> f (Expr us b)
     reduceSnd e' = case e' of
                      O2 (Con Tup) _ e2 -> go e2
-                     _                 -> snd' (go e')
-    reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr us a
+                     _                 -> snd' <$> go e'
+    reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> f (Expr us a)
     reduceIf eb ex ey = case eb of
                           O0 (B b) | b         -> go ex
                                    | otherwise -> go ey
-                          _                    -> if' (go eb) (go ex) (go ey)
-    reduceAp :: forall a b. Expr vs (a -> b) -> Expr vs a -> Expr us b
+                          _                    -> if' <$> go eb <*> go ex <*> go ey
+    reduceAp :: forall a b. Expr vs (a -> b) -> Expr vs a -> f (Expr us b)
     reduceAp ef ex = case ef of
-                       Lambda eλ -> go $ reduceWith apply eλ
-                       _         -> go ef ~$ go ex
+                       Lambda eλ -> go (reduceWith apply eλ)
+                       _         -> (~$) <$> go ef <*> go ex
       where
         apply :: forall k. Indexor (a ': vs) k -> Expr vs k
         apply IZ      = ex
         apply (IS ix) = V ix
-    reduceCase :: forall a b c. Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr us c
+    reduceCase :: forall a b c. Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> f (Expr us c)
     reduceCase ee el er = case ee of
                             O1 (Con Left') ex  -> reduceAp el ex
                             O1 (Con Right') ex -> reduceAp er ex
-                            _                  -> case' (go ee) (go el) (go er)
-    reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr us [b]
+                            _                  -> case' <$> go ee <*> go el <*> go er
+    reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> f (Expr us [b])
     reduceUnfoldrN en ef ez = case reduce en of
-                                O0 (I i) | i <= 0    -> nil'
+                                O0 (I i) | i <= 0    -> pure nil'
                                          | otherwise -> go (unfold (i - 1))
-                                _                    -> unfoldrN' (go en) (go ef) (go ez)
+                                _                    -> unfoldrN' <$> go en <*> go ef <*> go ez
       where
         unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
                                                    (pushInto ef)
                                                    (snd' (V IZ))
                    ) ~$ (ef ~$ ez)
-    reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr us b
+    reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> f (Expr us b)
     reduceFoldr ef ez exs = case reduce exs of
                               O0 Nil               -> go ez
                               O2 (Con Cons) ey eys -> go $ ef ~$ ey
                                                               ~$ foldr' ef ez eys
-                              _                    -> foldr' (go ef) (go ez) (go exs)
-    go' :: forall d a. Expr (d ': vs) a -> Expr (d ': us) a
-    go' = reduceWith f'
+                              _                    -> foldr' <$> go ef <*> go ez <*> go exs
+    go' :: forall d a. Expr (d ': vs) a -> f (Expr (d ': us) a)
+    go' = reduceWithA f'
       where
-        f' :: forall k. Indexor (d ': vs) k  -> Expr (d ': us) k
-        f' IZ      = V IZ
-        f' (IS ix) = shuffleVars IS $ f ix
+        f' :: forall k. Indexor (d ': vs) k  -> f (Expr (d ': us) k)
+        f' IZ      = pure $ V IZ
+        f' (IS ix) = shuffleVars IS <$> f ix
 
 shuffleVars :: forall ks js c. (forall k. Indexor ks k -> Indexor js k) -> Expr ks c -> Expr js c
 shuffleVars f = reduceWith (V . f)

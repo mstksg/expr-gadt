@@ -21,11 +21,13 @@ library
                        Data.ExprGADT.Types
                        Data.ExprGADT.Eval
                        Data.ExprGADT.Generate
+                       Data.ExprGADT.Lenses
                        Data.Rando
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
                      , MonadRandom
+                     , profunctors
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
