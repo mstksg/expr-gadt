@@ -4,7 +4,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
 
-module Data.ExprGADT.Lenses where
+module Data.ExprGADT.Traversals where
 
 import Data.Functor.Identity
 import Data.ExprGADT.Types

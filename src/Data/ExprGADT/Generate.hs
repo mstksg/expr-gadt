@@ -7,6 +7,7 @@ import Control.Monad.Random
 import Data.ExprGADT.Types
 import Data.ExprGADT.Expr
 import Data.ExprGADT.Eval
+import Data.ExprGADT.Traversals
 import Control.Monad
 
 type ExprGenerator m vs a = Int -> m (Expr vs a)
