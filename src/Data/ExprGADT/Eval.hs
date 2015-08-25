@@ -9,6 +9,7 @@
 
 module Data.ExprGADT.Eval where
 
+import Debug.Trace
 import Data.Functor.Identity
 import Data.ExprGADT.Types
 import Data.List (unfoldr)
@@ -70,7 +71,7 @@ reduceWithA' f = go
     go :: Expr vs a -> f (Expr us a)
     go e = case e of
              V ix              -> f (V ix)
-             O0 o              -> pure $ O0 o
+             O0 o              -> f $ O0 o
              O1 o e1           -> case o of
                                     Con o'     -> case e1 of
                                                     O0 o'' -> case op1_ o' (op0 o'') of

@@ -102,15 +102,15 @@ etGenerators t = do
 polyGenerators :: MonadRandom m => EType a -> ExprGenerators m vs a
 polyGenerators t d = (map . second) (/4) gens
   where
-    gens = [ (generateFst, 0.1)
-           , (generateSnd, 0.1)
+    gens = [ (generateFst, 0.5)
+           , (generateSnd, 0.5)
            , (generateAp, 1)
            , (if' <$> generateBool <*> generateX <*> generateX , 1)
            , (generateCase, 1)
            , (generateFold, 1)
            ]
     generateBool = genFromEType EBool (d - 1)
-    generateX    = genFromEType t (d - 2)
+    generateX    = genFromEType t (d - 1)
     generateFst = do
       ETW t1 <- generateETypeW typeDepth
       et <- genFromEType (ETup t t1) (d `div` 2)
@@ -147,10 +147,10 @@ generateETypeW d | d <= 0    = join (fromList gens0)
             , (return (ETW EUnit), 1)
             ]
     gens  = gens0
-         ++ [ ((\(ETW t1) (ETW t2) -> ETW (ETup t1 t2)) <$> generateETypeW' <*> generateETypeW'    , 0)
-            , ((\(ETW t1) (ETW t2) -> ETW (EEither t1 t2)) <$> generateETypeW' <*> generateETypeW' , 1)
-            , ((\(ETW t1) (ETW t2) -> ETW (EFunc t1 t2)) <$> generateETypeW' <*> generateETypeW'   , 1)
-            , ((\(ETW t) -> ETW (EList t)) <$> generateETypeW'                                     , 1)
+         ++ [ ((\(ETW t1) (ETW t2) -> ETW (ETup t1 t2)) <$> generateETypeW' <*> generateETypeW'    , 0.5)
+            , ((\(ETW t1) (ETW t2) -> ETW (EEither t1 t2)) <$> generateETypeW' <*> generateETypeW' , 0.5)
+            , ((\(ETW t1) (ETW t2) -> ETW (EFunc t1 t2)) <$> generateETypeW' <*> generateETypeW'   , 0.25)
+            , ((\(ETW t) -> ETW (EList t)) <$> generateETypeW'                                     , 0.5)
             ]
     generateETypeW' = generateETypeW (d - 1)
 

@@ -41,6 +41,8 @@ traverseUnitLeaves f = traverseExprLeaves f'
 -- O2's only if they don't contain any more O2's ?  O2's all the way down?
 -- O2's all the way down would definitely require Monad.
 
+
+-- can cause infinite loop?
 type ExprLeaf vs a = Either (Indexor vs a) (Op0 a)
 
 traverseExprLeaves :: forall us vs a f. Applicative f => (forall b. ExprLeaf vs b -> f (Expr us b)) -> Expr vs a -> f (Expr us a)
