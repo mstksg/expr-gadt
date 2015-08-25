@@ -1,14 +1,26 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DataKinds #-}
 
 module Data.ExprGADT.Generate where
 
 import Control.Monad.Random
+import Control.Applicative
 import Data.ExprGADT.Types
 import Data.ExprGADT.Expr
 import Data.ExprGADT.Eval
+import Data.Bifunctor
 import Data.ExprGADT.Traversals
 import Control.Monad
+
+data Chain :: (* -> *) -> * -> * -> * where
+    CLeaf :: p (a -> b) -> Chain p a b
+    CNode :: Chain p a b -> Chain p b c -> Chain p a c
+
+type EChain = Chain EType
 
 type ExprGenerator m vs a = Int -> m (Expr vs a)
 
@@ -19,7 +31,9 @@ genFromEType e = join . fromList . etGenerators e
 
 etGenerators :: forall m vs a. MonadRandom m => EType a -> ExprGenerators m vs a
 etGenerators t = do
-    pGens <- polyGenerators t
+    d <- id
+    pGens <- if d > 0 then polyGenerators t
+                      else return []
     tGens <- case t of
                EInt          -> concat <$> sequence [intGenerators]
                EBool         -> concat <$> sequence [boolGenerators]
@@ -27,19 +41,114 @@ etGenerators t = do
                EList t1      -> concat <$> sequence [listGenerators t1]
                ETup t1 t2    -> concat <$> sequence [tupleGenerators t1 t2]
                EEither t1 t2 -> concat <$> sequence [eitherGenerators t1 t2]
+               EFunc EInt a          -> (map . first) toIntFunction <$> etGenerators a
+               EFunc EBool a         -> (map . first) toBoolFunction <$> etGenerators a
+               EFunc EUnit a         -> (map . first) toUnitFunction <$> etGenerators a
+               EFunc (ETup a b) c    -> (map . first . fmap) uncurry' <$> etGenerators (EFunc a (EFunc b c))
+               EFunc (EEither a b) c -> liftA2 (\(f,x) (g,y) -> (caseUp f g, x+y)) <$> etGenerators (EFunc a c) <*> etGenerators (EFunc b c)
+               EFunc (EList x) y     -> case y of
+                                          EList z -> (:) <$> fmap (,1) (ana x y)
+                                                         <*> listFuncGenerators x z
+                                          _ -> (:[]) . (,1) <$> ana x y
+               EFunc (EFunc x y) z   -> (:[]) . (,1) <$> funcFuncGen x y z
     return (pGens ++ tGens)
+  where
+    p :: Double
+    p = 0.5
+    toIntFunction :: forall b us. m (Expr us b) -> m (Expr us (Int -> b))
+    toIntFunction gx = do
+        e  <- shuffleVars' IS <$> gx
+        e' <- flip traverseIntLeaves e $ \i -> do
+                c <- (<= p) <$> getRandomR (0, 1)
+                return $ if c then V IZ else iI i
+        return $ λ .-> e'
+    toBoolFunction :: forall b us. m (Expr us b) -> m (Expr us (Bool -> b))
+    toBoolFunction gx = do
+        e  <- shuffleVars' IS <$> gx
+        e' <- flip traverseBoolLeaves e $ \b -> do
+                c <- (<= p) <$> getRandomR (0, 1)
+                return $ if c then V IZ else bB b
+        return $ λ .-> e'
+    toUnitFunction :: forall b us. m (Expr us b) -> m (Expr us (() -> b))
+    toUnitFunction gx = do
+      e <- pushInto <$> gx
+      return $ λ .-> e
+    caseUp :: forall us b c d.
+              m (Expr (Either b c ': us) (b -> d))
+           -> m (Expr (Either b c ': us) (c -> d))
+           -> m (Expr us (Either b c -> d))
+    caseUp gx gy = do
+      ef <- gx
+      eg <- gy
+      return $ λ .-> case' (V IZ) ef eg
+    ana :: forall us b c. EType b -> EType c -> ExprGenerator m us ([b] -> c)
+    ana t1 t2 d = do
+      f <- genFromEType (EFunc t1 (EFunc t2 t2)) (d - 1)
+      z <- genFromEType t2 (d - 1)
+      return $ λ .-> foldr' f z (V IZ)
+    funcFuncGen :: forall us b c d. EType b -> EType c -> EType d -> ExprGenerator m us ((b -> c) -> d)
+    funcFuncGen t1 t2 t3 d = do
+      z <- genFromEType t1 (d - 1)
+      f <- genFromEType (EFunc t2 t3) (d - 1)
+      return $ λ .-> f ~$ (V IZ ~$ z)
+
 
 polyGenerators :: MonadRandom m => EType a -> ExprGenerators m vs a
-polyGenerators t d = [ (fst' <$> undefined                               , 0)
-                     , (snd' <$> undefined                               , 0)
-                     , ((~$) <$> undefined <*> undefined                 , 0)
+polyGenerators t d = [ (generateFst, 0.5)
+                     , (generateSnd, 0.5)
+                     , (generateAp, 1)
                      , (if' <$> generateBool <*> generateX <*> generateX , 1)
-                     , (case' <$> undefined <*> undefined <*> undefined  , 0)
-                     , (foldr' <$> undefined <*> generateX <*> undefined , 0)
+                     , (generateCase, 1)
+                     , (generateFold, 1)
                      ]
   where
+    typeDepth :: Int
+    typeDepth = 2
     generateBool = genFromEType EBool (d - 1)
     generateX    = genFromEType t (d - 1)
+    generateFst = do
+      ETW t1 <- generateETypeW typeDepth
+      et <- genFromEType (ETup t t1) (d - 1)
+      return $ fst' et
+    generateSnd = do
+      ETW t1 <- generateETypeW typeDepth
+      et <- genFromEType (ETup t1 t) (d - 1)
+      return $ snd' et
+    generateCase = do
+      ETW t1 <- generateETypeW typeDepth
+      ETW t2 <- generateETypeW typeDepth
+      ee <- genFromEType (EEither t1 t2) (d - 1)
+      el <- genFromEType (EFunc t1 t) (d - 1)
+      er <- genFromEType (EFunc t2 t) (d - 1)
+      return $ case' ee el er
+    generateAp = do
+      ETW t1 <- generateETypeW typeDepth
+      ef <- genFromEType (EFunc t1 t) (d - 1)
+      ex <- genFromEType t1 (d - 1)
+      return $ ef ~$ ex
+    generateFold = do
+      ETW t1 <- generateETypeW typeDepth
+      ef <- genFromEType (EFunc t1 (EFunc t t)) (d - 1)
+      ez <- genFromEType t (d - 1)
+      exs <- genFromEType (EList t1) (d - 1)
+      return $ foldr' ef ez exs
+
+generateETypeW :: MonadRandom m => Int -> m ETypeW
+generateETypeW d | d <= 0    = join (fromList gens0)
+                 | otherwise = join (fromList gens)
+  where
+    gens0 = [ (return (ETW EInt) , 1)
+            , (return (ETW EBool), 1)
+            , (return (ETW EUnit), 1)
+            ]
+    gens  = gens0
+         ++ [ ((\(ETW t1) (ETW t2) -> ETW (ETup t1 t2)) <$> generateETypeW' <*> generateETypeW'    , 1)
+            , ((\(ETW t1) (ETW t2) -> ETW (EEither t1 t2)) <$> generateETypeW' <*> generateETypeW' , 1)
+            , ((\(ETW t1) (ETW t2) -> ETW (EFunc t1 t2)) <$> generateETypeW' <*> generateETypeW'   , 1)
+            , ((\(ETW t) -> ETW (EList t)) <$> generateETypeW'                                     , 1)
+            ]
+    generateETypeW' = generateETypeW (d - 1)
+
 
 intGenerators :: MonadRandom m => ExprGenerators m vs Int
 intGenerators d = (iI <$> getRandomR (-20, 20), 1)
@@ -63,6 +172,7 @@ boolGenerators d = (bB <$> getRandom, 1)
            , ((~<=) <$> generateInt <*> generateInt              , 1)
            , ((~<) <$> generateInt <*> generateInt               , 1)
            , ((~==) <$> generateInt <*> generateInt              , 1)
+           , (divides' <$> generateInt <*> generateInt           , 1)
            , ((~&&) <$> generateBool <*> generateBool            , 1)
            , ((~||) <$> generateBool <*> generateBool            , 1)
            , (xor' <$> generateBool <*> generateBool             , 1)
@@ -86,13 +196,14 @@ listGenerators t d = (return nil', 0.1)
            , (mapMaybe' <$> undefined <*> undefined            , 0)
            , (filter' <$> undefined <*> generateList           , 0)
            , ((~++) <$> generateList <*> generateList          , 1)
-           , (take' <$> (abs <$> generateInt) <*> generateList , 1)
-           , (unfoldrN' <$> generateInt <*> undefined <*> undefined, 0)
-           , (unfoldrNUntil' <$> generateInt <*> undefined <*> undefined, 0)
+           , (take' <$> generateInt <*> generateList , 1)
+           , (unfoldrN' <$> generateInt' <*> undefined <*> undefined, 0)
+           , (unfoldrNUntil' <$> generateInt' <*> undefined <*> undefined, 0)
            ]
     generateX    = genFromEType t (d - 1)
     generateList = genFromEType (EList t) (d - 1)
-    generateInt  = genFromEType EInt (d - 1)
+    generateInt  = min' 50 . abs <$> genFromEType EInt (d - 1)
+    generateInt' = min' (iI (d * 2)) <$> generateInt
 
 tupleGenerators :: MonadRandom m => EType a -> EType b -> ExprGenerators m vs (a, b)
 tupleGenerators t1 t2 d = gens
@@ -118,155 +229,30 @@ eitherGenerators t1 t2 d = gens
     generateX   = genFromEType t1 (d - 1)
     generateY   = genFromEType t2 (d - 1)
 
-int2IntGenerators :: MonadRandom m => ExprGenerators m vs (Int -> Int)
-int2IntGenerators d = gens
+listFuncGenerators :: forall m vs a b. MonadRandom m => EType a -> EType b -> ExprGenerators m vs ([a] -> [b])
+listFuncGenerators t1 t2 d = gens
   where
-    gens = [ (return $ λ .-> abs (V IZ), 1)
-           , (return $ λ .-> signum (V IZ), 1)
-           , (λ . (+ V IZ) <$> generateInt, 1)
-           , (λ . (* V IZ) <$> generateInt, 1)
-           , (λ . subtract (V IZ) <$> generateInt, 1)
-           , (λ . (V IZ -) <$> generateInt, 1)
+    gens = [ ((\f g -> λ .-> filter' f (map' g (V IZ))) <$> generatePredY <*> generateMapper, 1)
+           , ((\f g -> λ .-> map' f (filter' g (V IZ))) <$> generateMapper <*> generatePredX, 1)
+           , (λ . flip mapMaybe' (V IZ) <$> generateMaybe, 1)
+           , ((\i f -> λ .-> take' i (map' f (V IZ))) <$> generateInt <*> generateMapper, 1)
+           , ((\ys f -> λ .-> map' f (V IZ) ~++ ys) <$> generateListY <*> generateMapper, 0.5)
+           , ((\ys f -> λ .-> ys ~++ map' f (V IZ)) <$> generateListY <*> generateMapper, 0.5)
+           , ((\xs f -> λ .-> map' f (V IZ ~++ xs)) <$> generateListX <*> generateMapper, 0.5)
+           , ((\xs f -> λ .-> map' f (xs ~++ V IZ)) <$> generateListX <*> generateMapper, 0.5)
            ]
-    generateInt = genFromEType EInt (d - 1)
 
-int2BoolGenerators :: MonadRandom m => ExprGenerators m vs (Int -> Bool)
-int2BoolGenerators d = gens
-  where
-    gens = [ (λ . (`divides'` V IZ) <$> generateInt, 1)
-           , (λ . (V IZ `divides'`) <$> generateInt, 1)
-           , (λ . (V IZ ~<=) <$> generateInt, 1)
-           , (λ . (V IZ ~<) <$> generateInt, 1)
-           , (λ . (V IZ ~==) <$> generateInt, 1)
-           ]
-    generateInt = genFromEType EInt (d - 1)
-
-bool2BoolGenerators :: MonadRandom m => ExprGenerators m vs (Bool -> Bool)
-bool2BoolGenerators d = gens
-  where
-    gens = [ (return $ λ .-> not' (V IZ), 1)
-           , (λ . (V IZ ~&&) <$> generateBool, 1)
-           , (λ . (V IZ ~||) <$> generateBool, 1)
-           , (λ . xor' (V IZ) <$> generateBool, 1)
-           ]
-    generateBool = genFromEType EBool (d - 1)
-
-int2ListGenerators :: MonadRandom m => EType a -> ExprGenerators m vs (Int -> [a])
-int2ListGenerators t d = gens
-  where
-    gens = [ (λ . take' (abs (V IZ)) <$> generateList, 1)
-           , ((\f z -> λ .-> unfoldrN' (V IZ) f z) <$> undefined <*> undefined, 0)
-           , ((\f z -> λ .-> unfoldrNUntil' (V IZ) f z) <$> undefined <*> undefined, 0)
-           ]
-    generateList = genFromEType (EList t) (d - 1)
-
-bool2AnyGenerators :: MonadRandom m => EType a -> ExprGenerators m vs (Bool -> a)
-bool2AnyGenerators t d = [ (gen, 1) ]
-  where
-    gen = do
-      x <- genFromEType t (d - 1)
-      y <- genFromEType t (d - 1)
-      return $ λ .-> if' (V IZ) x y
-
-any2TupleGenerators :: MonadRandom m => EType a -> EType b -> EType c -> ExprGenerators m vs (a -> (b, c))
-any2TupleGenerators t1 t2 t3 d = [(gen, 1)]
-  where
-    gen = do
-      f <- genFromEType (EFunc t1 t2) (d - 1)
-      g <- genFromEType (EFunc t1 t3) (d - 1)
-      return $ λ .-> tup' (f ~$ V IZ) (g ~$ V IZ)
-
-either2AnyGenerators :: MonadRandom m => EType a -> EType b -> EType c -> ExprGenerators m vs (Either a b -> c)
-either2AnyGenerators t1 t2 t3 d = [ (gen, 1) ]
-  where
-    gen = do
-      f <- genFromEType (EFunc t1 t3) (d - 1)
-      g <- genFromEType (EFunc t2 t3) (d - 1)
-      return $ λ .-> case' (V IZ) f g
-
-    -- gens = [ ((~:) <$> generateX <*> generateList              , 1)
-    --        , (map' <$> undefined <*> undefined                 , 0)
-    --        , (mapMaybe' <$> undefined <*> undefined            , 0)
-    --        , (filter' <$> undefined <*> generateList           , 0)
-    --        , ((~++) <$> generateList <*> generateList          , 1)
-    --        , (take' <$> (abs <$> generateInt) <*> generateList , 1)
-    --        ]
-
--- generateFunc :: forall a b vs m. MonadRandom m => EType (a -> b) -> ExprGenerator m vs (a -> b)
--- generateFunc e d = case e of
---     EFunc EInt EInt   -> fromList' e [ (return id', 1)
---                                      , (return $ λ .-> abs (V IZ), 1)
---                                      , (return $ λ .-> signum (V IZ), 1)
---                                      , (λ . (+ V IZ) <$> generateInt d', 1)
---                                      , (λ . (* V IZ) <$> generateInt d', 1)
---                                      , (λ . subtract (V IZ) <$> generateInt d', 1)
---                                      , (λ . (V IZ -) <$> generateInt d', 1)
---                                      ]
---     EFunc EInt EBool  -> fromList' e [ (λ . (`divides'` V IZ) <$> generateInt d', 1)
---                                      , (λ . (V IZ `divides'`) <$> generateInt d', 1)
---                                      , (λ . (V IZ ~<=) <$> generateInt d', 1)
---                                      , (λ . (V IZ ~<) <$> generateInt d', 1)
---                                      , (λ . (V IZ ~==) <$> generateInt d', 1)
---                                      -- okay
---                                      , ((~.) <$> generateFunc e d' <*> generateFunc (EFunc EInt EInt) d', 1)
---                                      ]
---     EFunc EBool EBool -> fromList' e [ (return id', 1)
---                                      , (return $ λ .-> not' (V IZ), 1)
---                                      , (λ . (V IZ ~&&) <$> generateBool d', 1)
---                                      , (λ . (V IZ ~||) <$> generateBool d', 1)
---                                      , (λ . xor' (V IZ) <$> generateBool d', 1)
---                                      ]
---     EFunc EBool y     -> fromList' e [ ((\t f -> λ .-> if' (V IZ) t f) <$> genFromEType y d' <*> genFromEType y d', 1) ]
---     EFunc a (EEither a b) -> undefined
---   where
---     fromList' :: forall c d. EType (c -> d) -> [(m (Expr vs (c -> d)), Rational)] -> m (Expr vs (c -> d))
---     fromList' t gens = join . fromList $ gens0 t ++ gens
---     gens0 :: forall c d. EType (c -> d) -> [(m (Expr vs (c -> d)), Rational)]
---     gens0 t@(EFunc _ y) = [ (const' <$> genFromEType y d', 1)
---                           , (generateIf (generateFunc t) d, 1)
---                           , (case' <$> undefined <*> undefined <*> undefined, 0)
---                           , (foldr' <$> undefined <*> generateFunc t d' <*> undefined, 0)
---                           ]
---     d' = max 0 (d - 1)
-
--- generateIntToInt :: MonadRandom m => ExprGenerator m vs (Int -> Int)
--- generateIntToInt d | d <= 0    = join . fromList $ [ (return $ λ .-> V IZ, 1)
---                                                    , (λ <$> generateInt 0, 1)
---                                                    ]
---                    | otherwise = join (fromList gens)
---   where
---     gens = [ (return $ λ .-> V IZ, 1)
---            , (λ <$> generateInt (d - 1), 1)
---            , ((\i -> λ .-> i + V IZ) <$> generateInt (d - 1), 1)
---            , ((\i -> λ .-> i * V IZ) <$> generateInt (d - 1), 1)
---            ]
-
--- generateETypeW :: MonadRandom m => Int -> m ETypeW
--- generateETypeW d | d <= 0    = join (fromList gens0)
---                  | otherwise = join (fromList gens)
---   where
---     gens0 = [ (return (ETW EInt) , 1)
---             , (return (ETW EBool), 1)
---             , (return (ETW EUnit), 1)
---             ]
---     gens  = gens0
---          ++ [ ((\(ETW t1) (ETW t2) -> ETW (ETup t1 t2)) <$> generateETypeW' <*> generateETypeW'    , 1)
---             , ((\(ETW t1) (ETW t2) -> ETW (EEither t1 t2)) <$> generateETypeW' <*> generateETypeW' , 1)
---             , ((\(ETW t1) (ETW t2) -> ETW (EFunc t1 t2)) <$> generateETypeW' <*> generateETypeW'   , 1)
---             , ((\(ETW t) -> ETW (EList t)) <$> generateETypeW'                                     , 1)
---             ]
---     generateETypeW' = generateETypeW (d - 1)
-
--- generateExprW :: MonadRandom m => Int -> m ExprW
--- generateExprW d = do
---     ETW t <- generateETypeW 2
---     EW t <$> genFromEType t d
-
--- genFromEType :: MonadRandom m => EType a -> ExprGenerator m vs a
--- genFromEType EInt = generateInt
--- genFromEType EBool = generateBool
--- genFromEType EUnit = generateUnit
--- genFromEType (EList x) = generateList (genFromEType x)
--- genFromEType (ETup x y) = generateTuple (genFromEType x) (genFromEType y)
--- genFromEType (EEither x y) = generateEither (genFromEType x) (genFromEType y)
--- genFromEType (EFunc _ _) = undefined
+    generateInt :: forall us. m  (Expr us Int)
+    generateInt = min' 50 . abs <$> genFromEType EInt (d - 1)
+    generateMapper :: forall us. m (Expr us (a -> b))
+    generateMapper = genFromEType (EFunc t1 t2) (d - 1)
+    generatePredX :: forall us. m (Expr us (a -> Bool))
+    generatePredX = genFromEType (EFunc t1 EBool) (d - 1)
+    generatePredY :: forall us. m (Expr us (b -> Bool))
+    generatePredY = genFromEType (EFunc t2 EBool) (d - 1)
+    generateMaybe :: forall us. m (Expr us (a -> Maybe' b))
+    generateMaybe = genFromEType (EFunc t1 (EEither EUnit t2)) (d - 1)
+    generateListX :: forall us. m (Expr us [a])
+    generateListX = genFromEType (EList t1) (d - 1)
+    generateListY :: forall us. m (Expr us [b])
+    generateListY = genFromEType (EList t2) (d - 1)

@@ -72,6 +72,12 @@ even' ex = maybe' false' (λ .-> V IZ ~== 0) (ex `mod'` 2)
 divides' :: Expr vs Int -> Expr vs Int -> Expr vs Bool
 divides' ex ey = maybe' false' (λ .-> V IZ ~== 0) (ex `mod'` ey)
 
+max' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+max' ex ey = if' (ex ~<= ey) ey ex
+
+min' :: Expr vs Int -> Expr vs Int -> Expr vs Int
+min' ex ey = if' (ex ~<= ey) ey ex
+
 curry' :: Expr vs ((a, b) -> c) -> Expr vs (a -> b -> c)
 curry' ef = λ .-> λ .-> pushInto ef ~$ tup' (V (IS IZ)) (V IZ)
 
@@ -99,6 +105,9 @@ take' en exs = foldr' step (const' nil') exs ~$ en
 -- lists, very slow!
 take'' :: Expr vs Int -> Expr vs [a] -> Expr vs [a]
 take'' en = unfoldrNUntil' en (inLambda uncons')
+
+replicate' :: Expr vs Int -> Expr vs a -> Expr vs [a]
+replicate' en = unfoldrN' en $ λ .-> tup' (V IZ) (V IZ)
 
 (~++) :: Expr vs [a] -> Expr vs [a] -> Expr vs [a]
 exs ~++ eys = foldr' aggregate id' exs ~$ eys

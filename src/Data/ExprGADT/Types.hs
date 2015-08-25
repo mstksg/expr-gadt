@@ -110,7 +110,7 @@ deriving instance Eq (Op2 a b c)
 deriving instance Eq (Op2' a b c)
 deriving instance Eq (Op3 a b c d)
 deriving instance Eq (Op3' a b c d)
-deriving instance Eq (EType a)
+-- deriving instance Eq (EType a)
 -- deriving instance Eq ExprW
 
 class ToExpr a where
@@ -213,6 +213,19 @@ instance Eq (HList '[]) where
 
 instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
     x :< xs == y :< ys = x == y && xs == ys
+
+eTypeEq :: EType a -> EType b -> Bool
+eTypeEq EInt EInt                     = True
+eTypeEq EBool EBool                   = True
+eTypeEq EUnit EUnit                   = True
+eTypeEq (EList x) (EList y)           = eTypeEq x y
+eTypeEq (ETup x y) (ETup x' y')       = eTypeEq x x' && eTypeEq y y'
+eTypeEq (EEither x y) (EEither x' y') = eTypeEq x x' && eTypeEq y y'
+eTypeEq (EFunc x y) (EFunc x' y')     = eTypeEq x x' && eTypeEq y y'
+eTypeEq _ _                           = False
+
+instance Eq (EType a) where
+    (==) = eTypeEq
 
 instance Show (Expr vs a) where
     showsPrec p e = showParen (p > 10) $ case e of
