@@ -7,6 +7,7 @@
 module Data.ExprGADT.Traversals where
 
 import Data.Functor.Identity
+import Debug.Trace
 import Data.Typeable
 import Data.ExprGADT.Types
 import Data.ExprGADT.Eval
