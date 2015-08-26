@@ -18,6 +18,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.ExprGADT.Types
+                       Data.FixN
   -- exposed-modules:     Data.ExprGADT.Expr
   --                      Data.ExprGADT.Types
   --                      Data.ExprGADT.Eval
