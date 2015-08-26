@@ -59,36 +59,36 @@ traverseExprLeaves f = go
   where
     go :: forall b. Expr vs b -> f (Expr vs b)
     go e = case e of
-             V ix -> f (Left ix)
-             O0 o -> f (Right o)
-             O1 o e1 -> O1 o <$> go e1
-             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             V ix          -> f (Left ix)
+             O0 o          -> f (Right o)
+             O1 o e1       -> O1 o <$> go e1
+             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef -> Lambda <$> traverseExprLeaves f ef
+             Lambda ef     -> Lambda <$> traverseExprLeaves f ef
 
 traverseExprO0 :: forall vs a f. Applicative f => (forall b. Op0 b -> f (Expr vs b)) -> Expr vs a -> f (Expr vs a)
 traverseExprO0 f = go
   where
     go :: forall b. Expr vs b -> f (Expr vs b)
     go e = case e of
-             V ix -> pure $ V ix
-             O0 o -> f o
-             O1 o e1 -> O1 o <$> go e1
-             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             V ix          -> pure $ V ix
+             O0 o          -> f o
+             O1 o e1       -> O1 o <$> go e1
+             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef -> Lambda <$> traverseExprO0 (fmap (shuffleVars IS) . f) ef
+             Lambda ef     -> Lambda <$> traverseExprO0 (fmap (shuffleVars IS) . f) ef
 
 traverseExprPostM :: forall vs a m. Monad m => (forall b us. Expr us b -> m (Expr us b)) -> Expr vs a -> m (Expr vs a)
 traverseExprPostM f = go
   where
     go :: forall us b. Expr us b -> m (Expr us b)
     go e = case e of
-             V _  -> f e
-             O0 _ -> f e
-             O1 o e1 -> do
+             V _           -> f e
+             O0 _          -> f e
+             O1 o e1       -> do
                e1' <- go e1
                f $ O1 o e1'
-             O2 o e1 e2 -> do
+             O2 o e1 e2    -> do
                e1' <- go e1
                e2' <- go e2
                f $ O2 o e1' e2'
@@ -97,7 +97,7 @@ traverseExprPostM f = go
                e2' <- go e2
                e3' <- go e3
                f $ O3 o e1' e2' e3'
-             Lambda eλ -> do
+             Lambda eλ     -> do
                eλ' <- go eλ
                f $ Lambda eλ'
 
@@ -106,12 +106,12 @@ traverseExprPost_ f = go
   where
     go :: forall b us. Expr us b -> f ()
     go e = (case e of
-              V _ -> pure ()
-              O0 _ -> pure ()
-              O1 _ e1 -> go e1
-              O2 _ e1 e2 -> go e1 *> go e2
+              V _           -> pure ()
+              O0 _          -> pure ()
+              O1 _ e1       -> go e1
+              O2 _ e1 e2    -> go e1 *> go e2
               O3 _ e1 e2 e3 -> go e1 *> go e2 *> go e3
-              Lambda eλ -> go eλ
+              Lambda eλ     -> go eλ
            ) <* f e
 
 traverseExprPre_ :: forall vs a c f. Applicative f => (forall b us. Expr us b -> f c) -> Expr vs a -> f ()
@@ -119,12 +119,12 @@ traverseExprPre_ f = go
   where
     go :: forall b us. Expr us b -> f ()
     go e = f e *> case e of
-                    V _ -> pure ()
-                    O0 _ -> pure ()
-                    O1 _ e1 -> go e1
-                    O2 _ e1 e2 -> go e1 *> go e2
+                    V _           -> pure ()
+                    O0 _          -> pure ()
+                    O1 _ e1       -> go e1
+                    O2 _ e1 e2    -> go e1 *> go e2
                     O3 _ e1 e2 e3 -> go e1 *> go e2 *> go e3
-                    Lambda eλ -> go eλ
+                    Lambda eλ     -> go eλ
 
 traverseExprPreM :: forall vs a m. Monad m => (forall b us. Expr us b -> m (Expr us b)) -> Expr vs a -> m (Expr vs a)
 traverseExprPreM f = go
@@ -133,10 +133,10 @@ traverseExprPreM f = go
     go e = do
       e' <- f e
       case e' of
-        V _  -> return e'
-        O0 _ -> return e'
-        O1 o e1 -> O1 o <$> go e1
-        O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+        V _           -> return e'
+        O0 _          -> return e'
+        O1 o e1       -> O1 o <$> go e1
+        O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
         O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-        Lambda eλ -> Lambda <$> go eλ
+        Lambda eλ     -> Lambda <$> go eλ
 

@@ -135,12 +135,12 @@ subVariablesA f = go
   where
     go :: forall b. Expr vs b -> f (Expr us b)
     go e = case e of
-             V ix -> f ix
-             O0 o -> pure $ O0 o
-             O1 o e1 -> O1 o <$> go e1
-             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             V ix          -> f ix
+             O0 o          -> pure $ O0 o
+             O1 o e1       -> O1 o <$> go e1
+             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda eλ -> Lambda <$> subVariablesA f' eλ
+             Lambda eλ     -> Lambda <$> subVariablesA f' eλ
     f' :: forall b c. Indexor (c ': vs) b -> f (Expr (c ': us) b)
     f' IZ      = pure $ V IZ
     f' (IS ix) = subVariables (V . IS) <$> f ix
@@ -153,12 +153,12 @@ shuffleVarsA f = go
   where
     go :: forall b. Expr ks b -> f (Expr js b)
     go e = case e of
-             V ix -> V <$> f ix
-             O0 o -> pure $ O0 o
-             O1 o e1 -> O1 o <$> go e1
-             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             V ix          -> V <$> f ix
+             O0 o          -> pure $ O0 o
+             O1 o e1       -> O1 o <$> go e1
+             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef -> Lambda <$> shuffleVarsA f' ef
+             Lambda ef     -> Lambda <$> shuffleVarsA f' ef
     f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
     f' IZ      = pure IZ
     f' (IS ix) = IS <$> f ix
