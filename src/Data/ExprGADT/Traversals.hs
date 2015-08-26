@@ -1,9 +1,9 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE PolyKinds #-}
 
 module Data.ExprGADT.Traversals where
 

@@ -1,9 +1,9 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.ExprGADT.Generate where
 
