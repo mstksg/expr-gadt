@@ -17,12 +17,13 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Data.ExprGADT.Expr
-                       Data.ExprGADT.Types
-                       Data.ExprGADT.Eval
-                       Data.ExprGADT.Generate
-                       Data.ExprGADT.Traversals
-                       Data.Rando
+  exposed-modules:     Data.ExprGADT.Types
+  -- exposed-modules:     Data.ExprGADT.Expr
+  --                      Data.ExprGADT.Types
+  --                      Data.ExprGADT.Eval
+  --                      Data.ExprGADT.Generate
+  --                      Data.ExprGADT.Traversals
+  --                      Data.Rando
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
