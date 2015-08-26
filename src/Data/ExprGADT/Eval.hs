@@ -42,109 +42,111 @@ reduceAll :: Expr vs a -> Expr vs a
 reduceAll e | e == e'   = e'
             | otherwise = reduceAll e'
   where
-    e' = reduceWith V e
+    e' = collapse e
 
 reduce :: Expr vs a -> Expr vs a
-reduce = reduceWith V
+reduce = collapse
 
-reduceWith :: forall vs us o. (forall v. Indexor vs v -> Expr us v) -> Expr vs o -> Expr us o
-reduceWith f = runIdentity . reduceWithA (Identity . f)
-
-reduceWithA :: forall vs us o f. Applicative f => (forall v. Indexor vs v -> f (Expr us v)) -> Expr vs o -> f (Expr us o)
-reduceWithA f = reduceWithA' (f' f)
+collapse :: forall vs a. Expr vs a -> Expr vs a
+collapse e = case e of
+               V ix              -> V ix
+               O0 o              -> O0 o
+               O1 o e1           -> case o of
+                                      Con o'     -> case e1 of
+                                                      O0 o'' -> case op1_ o' (op0 o'') of
+                                                                  Just x -> O0 x
+                                                                  _      -> O1 o (collapse e1)
+                                                      _      -> O1 o (collapse e1)
+                                      Dec Fst    -> collapseFst e1
+                                      Dec Snd    -> collapseSnd e1
+               O2 o e1 e2        -> case o of
+                                      Con o' -> case (e1, e2) of
+                                                  (O0 o''1, O0 o''2) ->
+                                                    case op2_ o' (op0 o''1) (op0 o''2) of
+                                                      Just x -> O0 x
+                                                      _      -> O2 o (collapse e1) (collapse e2)
+                                                  _           -> O2 o (collapse e1) (collapse e2)
+                                      Dec Mod -> collapseModDiv Mod e1 e2
+                                      Dec Div -> collapseModDiv Div e1 e2
+                                      Dec Ap  -> collapseAp e1 e2
+               O3 o e1 e2 e3     -> case o of
+                                      Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
+                                      Dec If       -> collapseIf e1 e2 e3
+                                      Dec Case     -> collapseCase e1 e2 e3
+                                      Dec UnfoldrN -> collapseUnfoldrN e1 e2 e3
+                                      Dec Foldr    -> collapseFoldr e1 e2 e3
+               Lambda eλ         -> Lambda (collapse eλ)
   where
-    f' :: forall u vs us. (forall v. Indexor vs v -> f (Expr us v)) -> Expr vs u -> f (Expr us u)
-    f' f0 = go
+    collapseFst :: Expr vs (b, c) -> Expr vs b
+    collapseFst e' = case collapse e' of
+                       O2 (Con Tup) e1 _ -> collapse e1
+                       _                 -> fst' (collapse e')
+    collapseSnd :: Expr vs (b, c) -> Expr vs c
+    collapseSnd e' = case collapse e' of
+                       O2 (Con Tup) _ e2 -> collapse e2
+                       _                 -> snd' (collapse e')
+    collapseModDiv :: Op2' Int Int (Maybe' Int) -> Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
+    collapseModDiv o2 ex ey = case (ex, ey) of
+                              (O0 (I x), O0 (I y)) -> case op2' o2 x y of
+                                                        Left () -> O1 (Con Left') (O0 Unit)
+                                                        Right z -> O1 (Con Right') (O0 (I z))
+                              _                    -> O2 (Dec o2) (collapse ex) (collapse ey)
+    collapseAp :: forall b c. Expr vs (b -> c) -> Expr vs b -> Expr vs c
+    collapseAp ef ex = case collapse ef of
+                         Lambda eλ -> collapse (subVariables apply eλ)
+                         _         -> collapse ef ~$ collapse ex
       where
-        go :: forall q. Expr vs q -> f (Expr us q)
-        go e = case e of
-                 V ix -> f0 ix
-                 O0 o -> pure $ O0 o
-                 O1 o e1 -> O1 o <$> go e1
-                 O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
-                 O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-                 Lambda ef -> Lambda <$> f' undefined ef
-
-reduceWithA' :: forall vs us o f. Applicative f => (forall v. Expr vs v -> f (Expr us v)) -> Expr vs o -> f (Expr us o)
-reduceWithA' f = go
-  where
-    go :: Expr vs a -> f (Expr us a)
-    go e = case e of
-             V ix              -> f (V ix)
-             O0 o              -> f $ O0 o
-             O1 o e1           -> case o of
-                                    Con o'     -> case e1 of
-                                                    O0 o'' -> case op1_ o' (op0 o'') of
-                                                                Just x -> pure $ O0 x
-                                                                _      -> O1 o <$> go e1
-                                                    _      -> O1 o <$> go e1
-                                    Dec Fst    -> reduceFst e1
-                                    Dec Snd    -> reduceSnd e1
-             O2 o e1 e2        -> case o of
-                                    Con o' -> case (e1, e2) of
-                                                (O0 o''1, O0 o''2) -> case op2_ o' (op0 o''1) (op0 o''2) of
-                                                                        Just x -> pure $ O0 x
-                                                                        _      -> O2 o <$> go e1 <*> go e2
-                                                _           -> O2 o <$> go e1 <*> go e2
-                                    Dec Ap -> reduceAp e1 e2
-             O3 o e1 e2 e3     -> case o of
-                                    Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
-                                    Dec If       -> reduceIf e1 e2 e3
-                                    Dec Case     -> reduceCase e1 e2 e3
-                                    Dec UnfoldrN -> reduceUnfoldrN e1 e2 e3
-                                    Dec Foldr    -> reduceFoldr e1 e2 e3
-             Lambda eλ         -> Lambda <$> go' eλ
-    reduceFst :: Expr vs (a, b) -> f (Expr us a)
-    reduceFst e' = case e' of
-                     O2 (Con Tup) e1 _ -> go e1
-                     _                 -> fst' <$> go e'
-    reduceSnd :: Expr vs (a, b) -> f (Expr us b)
-    reduceSnd e' = case e' of
-                     O2 (Con Tup) _ e2 -> go e2
-                     _                 -> snd' <$> go e'
-    reduceIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> f (Expr us a)
-    reduceIf eb ex ey = case eb of
-                          O0 (B b) | b         -> go ex
-                                   | otherwise -> go ey
-                          _                    -> if' <$> go eb <*> go ex <*> go ey
-    reduceAp :: forall a b. Expr vs (a -> b) -> Expr vs a -> f (Expr us b)
-    reduceAp ef ex = case ef of
-                       Lambda eλ -> go (reduceWith apply eλ)
-                       _         -> (~$) <$> go ef <*> go ex
-      where
-        apply :: forall k. Indexor (a ': vs) k -> Expr vs k
-        apply IZ      = ex
+        apply :: forall d. Indexor (b ': vs) d -> Expr vs d
+        apply IZ      = collapse ex
         apply (IS ix) = V ix
-    reduceCase :: forall a b c. Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> f (Expr us c)
-    reduceCase ee el er = case ee of
-                            O1 (Con Left') ex  -> reduceAp el ex
-                            O1 (Con Right') ex -> reduceAp er ex
-                            _                  -> case' <$> go ee <*> go el <*> go er
-    reduceUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> f (Expr us [b])
-    reduceUnfoldrN en ef ez = case reduce en of
-                                O0 (I i) | i <= 0    -> pure nil'
-                                         | otherwise -> go (unfold (i - 1))
-                                _                    -> unfoldrN' <$> go en <*> go ef <*> go ez
+    collapseIf :: Expr vs Bool -> Expr vs b -> Expr vs b -> Expr vs b
+    collapseIf eb ex ey = case collapse eb of
+                            O0 (B b) | b         -> collapse ex
+                                     | otherwise -> collapse ey
+                            _                    -> if' (collapse eb) (collapse ex) (collapse ey)
+
+    collapseCase :: Expr vs (Either b c) -> Expr vs (b -> d) -> Expr vs (c -> d) -> Expr vs d
+    collapseCase ee el er = case collapse ee of
+                              O1 (Con Left') ex  -> collapse (collapseAp el ex)
+                              O1 (Con Right') ex -> collapse (collapseAp er ex)
+                              -- cannot properly collapse becuase of
+                              -- MOD!!!!!!
+                              -- O2 (Con Mod) ex ey -> collapse (collapseAp er ex)
+                              _                  -> case' (collapse ee) (collapse el) (collapse er)
+    collapseUnfoldrN :: Expr vs Int -> Expr vs (b -> (c, b)) -> Expr vs b -> Expr vs [c]
+    collapseUnfoldrN en ef ez = case collapse en of
+                                O0 (I i) | i <= 0    -> nil'
+                                         | otherwise -> collapse (unfold (i - 1))
+                                _                    -> unfoldrN' (collapse en) (collapse ef) (collapse ez)
       where
         unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
-                                                   (pushInto ef)
+                                                   (undefined ef)
                                                    (snd' (V IZ))
                    ) ~$ (ef ~$ ez)
-    reduceFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> f (Expr us b)
-    reduceFoldr ef ez exs = case reduce exs of
-                              O0 Nil               -> go ez
-                              O2 (Con Cons) ey eys -> go $ ef ~$ ey
-                                                              ~$ foldr' ef ez eys
-                              _                    -> foldr' <$> go ef <*> go ez <*> go exs
-    go' :: forall d a. Expr (d ': vs) a -> f (Expr (d ': us) a)
-    go' = reduceWithA' f'
-      where
-        f' :: forall k. Expr (d ': vs) k  -> f (Expr (d ': us) k)
-        f' (V ix) = case ix of
-                      IZ -> pure $ V IZ
-                      IS ix' -> shuffleVars IS <$> f (V ix')
-        f' e      = go' e
-        -- f' (IS ix) = shuffleVars IS <$> f ix
+    collapseFoldr :: Expr vs (b -> c -> c) -> Expr vs c -> Expr vs [b] -> Expr vs c
+    collapseFoldr ef ez exs = case collapse exs of
+                                O0 Nil               -> collapse ez
+                                O2 (Con Cons) ey eys -> collapse $ ef ~$ ey
+                                                                      ~$ foldr' ef ez eys
+                                _                    -> foldr' (collapse ef) (collapse ez) (collapse exs)
+
+subVariables :: forall vs us a. (forall b. Indexor vs b -> Expr us b) -> Expr vs a -> Expr us a
+subVariables f = runIdentity . subVariablesA (Identity . f)
+
+subVariablesA :: forall vs us f a. Applicative f => (forall b. Indexor vs b -> f (Expr us b)) -> Expr vs a -> f (Expr us a)
+subVariablesA f = go
+  where
+    go :: forall b. Expr vs b -> f (Expr us b)
+    go e = case e of
+             V ix -> f ix
+             O0 o -> pure $ O0 o
+             O1 o e1 -> O1 o <$> go e1
+             O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+             O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+             Lambda eλ -> Lambda <$> subVariablesA f' eλ
+    f' :: forall b c. Indexor (c ': vs) b -> f (Expr (c ': us) b)
+    f' IZ      = pure $ V IZ
+    f' (IS ix) = subVariables (V . IS) <$> f ix
 
 shuffleVars :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
 shuffleVars f = runIdentity . shuffleVarsA (pure . f)
@@ -225,8 +227,6 @@ op2 :: Op2 a b c -> a -> b -> c
 op2 Plus    = (+)
 op2 Times   = (*)
 op2 Minus   = (-)
-op2 Div     = \x y -> if y == 0 then Left () else Right (x `div` y)
-op2 Mod     = \x y -> if y == 0 then Left () else Right (x `mod` y)
 op2 LEquals = (<=)
 op2 And     = (&&)
 op2 Or      = (||)
@@ -245,11 +245,11 @@ op2_ o x y = modder (op2 o x y)
                Or      -> Just . B
                Tup     -> const Nothing
                Cons    -> const Nothing
-               Div     -> const Nothing
-               Mod     -> const Nothing
 
 op2' :: Op2' a b c -> a -> b -> c
-op2' Ap = ($)
+op2' Ap  = ($)
+op2' Div = \x y -> if y == 0 then Left () else Right (x `div` y)
+op2' Mod = \x y -> if y == 0 then Left () else Right (x `mod` y)
 
 op3 :: Op3 a b c d -> a -> b -> c -> d
 op3 = error "No constructors of Op3.  How absurd!"

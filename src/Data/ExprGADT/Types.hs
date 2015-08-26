@@ -11,6 +11,8 @@
 
 module Data.ExprGADT.Types where
 
+import Data.Proxy
+
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
     IS :: Indexor ks k -> Indexor (j ': ks) k
@@ -57,8 +59,6 @@ data Op2 :: * -> * -> * -> * where
     Plus    :: Op2 Int Int Int
     Times   :: Op2 Int Int Int
     Minus   :: Op2 Int Int Int
-    Div     :: Op2 Int Int (Maybe' Int)
-    Mod     :: Op2 Int Int (Maybe' Int)
     LEquals :: Op2 Int Int Bool
     And     :: Op2 Bool Bool Bool
     Or      :: Op2 Bool Bool Bool
@@ -66,7 +66,9 @@ data Op2 :: * -> * -> * -> * where
     Cons    :: Op2 a [a] [a]
 
 data Op2' :: * -> * -> * -> * where
-    Ap       :: Op2' (a -> b) a b
+    Ap      :: Op2' (a -> b) a b
+    Div     :: Op2' Int Int (Maybe' Int)
+    Mod     :: Op2' Int Int (Maybe' Int)
 
 data Op3 :: * -> * -> * -> * -> *
 
@@ -136,6 +138,30 @@ instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
     toExpr (Left x)  = O1 (Con Left') (toExpr x)
     toExpr (Right x) = O1 (Con Right') (toExpr x)
 
+class MakeEType a where
+    makeEType :: p a -> EType a
+
+instance MakeEType () where
+    makeEType _ = EUnit
+
+instance MakeEType Int where
+    makeEType _ = EInt
+
+instance MakeEType Bool where
+    makeEType _ = EBool
+
+instance MakeEType a => MakeEType [a] where
+    makeEType _ = EList (makeEType (Proxy :: Proxy a))
+
+instance (MakeEType a, MakeEType b) => MakeEType (a, b) where
+    makeEType _ = ETup (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+
+instance (MakeEType a, MakeEType b) => MakeEType (Either a b) where
+    makeEType _ = EEither (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+
+instance (MakeEType a, MakeEType b) => MakeEType (a -> b) where
+    makeEType _ = EFunc (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+
 onO :: (a -> c) -> (b -> c) -> O a b -> c
 onO f _ (Con x) = f x
 onO _ g (Dec x) = g x
@@ -186,8 +212,6 @@ op2Eq :: Op2 a b c -> Op2 d e f -> Bool
 op2Eq Plus Plus       = True
 op2Eq Times Times     = True
 op2Eq Minus Minus     = True
-op2Eq Div Div         = True
-op2Eq Mod Mod         = True
 op2Eq LEquals LEquals = True
 op2Eq And And         = True
 op2Eq Or Or           = True
@@ -196,7 +220,10 @@ op2Eq Cons Cons       = True
 op2Eq _ _             = False
 
 op2'Eq :: Op2' a b c -> Op2' d e f -> Bool
-op2'Eq Ap Ap = True
+op2'Eq Ap Ap   = True
+op2'Eq Div Div = True
+op2'Eq Mod Mod = True
+op2'Eq _ _     = False
 
 op3'Eq :: Op3' a b c d -> Op3' e f g h -> Bool
 op3'Eq If If             = True
@@ -356,11 +383,11 @@ xor' e1 e2 = (e1 ~|| e2) ~&& not' (e1 ~&& e2)
 
 infixl 7 `mod'`
 mod' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-mod' = O2 (Con Mod)
+mod' = O2 (Dec Mod)
 
 infixl 7 `div'`
 div' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-div' = O2 (Con Div)
+div' = O2 (Dec Div)
 
 infixr 5 ~:
 (~:) :: Expr vs a -> Expr vs [a] -> Expr vs [a]
