@@ -418,3 +418,44 @@ infixr 0 .->
 (.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
 (.->) = ($)
 
+isEEither :: EType a -> Bool
+isEEither (EEither _ _) = True
+isEEither _ = False
+
+isEFunc :: EType a -> Bool
+isEFunc (EFunc _ _) = True
+isEFunc _ = False
+
+isCompoundType :: EType a -> Bool
+isCompoundType (EEither _ _) = True
+isCompoundType (ETup _ _) = True
+isCompoundType (EFunc _ _) = True
+isCompoundType (EList _) = True
+isCompoundType _ = False
+
+eTypeLeaves :: EType a -> Int
+eTypeLeaves EInt = 1
+eTypeLeaves EBool = 1
+eTypeLeaves EUnit = 1
+eTypeLeaves (EList x) = eTypeLeaves x
+eTypeLeaves (EEither x y) = eTypeLeaves x + eTypeLeaves y
+eTypeLeaves (ETup x y) = eTypeLeaves x + eTypeLeaves y
+eTypeLeaves (EFunc x y) = eTypeLeaves x + eTypeLeaves y
+
+eTypeNodes :: EType a -> Int
+eTypeNodes EInt = 1
+eTypeNodes EBool = 1
+eTypeNodes EUnit = 1
+eTypeNodes (EList x) = 1 + eTypeLeaves x
+eTypeNodes (EEither x y) = 1 + eTypeLeaves x + eTypeLeaves y
+eTypeNodes (ETup x y) = 1 + eTypeLeaves x + eTypeLeaves y
+eTypeNodes (EFunc x y) = 1 + eTypeLeaves x + eTypeLeaves y
+
+eTypeDepth :: EType a -> Int
+eTypeDepth EInt = 0
+eTypeDepth EBool = 1
+eTypeDepth EUnit = 0
+eTypeDepth (EList x) = 1 + eTypeDepth x
+eTypeDepth (EEither x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+eTypeDepth (ETup x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+eTypeDepth (EFunc x y) = 1 + max (eTypeDepth x) (eTypeDepth y)

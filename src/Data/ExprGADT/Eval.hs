@@ -65,7 +65,7 @@ collapse e = case e of
                                                     case op2_ o' (op0 o''1) (op0 o''2) of
                                                       Just x -> O0 x
                                                       _      -> O2 o (collapse e1) (collapse e2)
-                                                  _           -> O2 o (collapse e1) (collapse e2)
+                                                  _   -> O2 o (collapse e1) (collapse e2)
                                       Dec Mod -> collapseModDiv Mod e1 e2
                                       Dec Div -> collapseModDiv Div e1 e2
                                       Dec Ap  -> collapseAp e1 e2
@@ -109,9 +109,6 @@ collapse e = case e of
     collapseCase ee el er = case collapse ee of
                               O1 (Con Left') ex  -> collapse (collapseAp el ex)
                               O1 (Con Right') ex -> collapse (collapseAp er ex)
-                              -- cannot properly collapse becuase of
-                              -- MOD!!!!!!
-                              -- O2 (Con Mod) ex ey -> collapse (collapseAp er ex)
                               _                  -> case' (collapse ee) (collapse el) (collapse er)
     collapseUnfoldrN :: Expr vs Int -> Expr vs (b -> (c, b)) -> Expr vs b -> Expr vs [c]
     collapseUnfoldrN en ef ez = case collapse en of

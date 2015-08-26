@@ -9,6 +9,7 @@ module Data.ExprGADT.Traversals where
 import Data.Functor.Identity
 import Debug.Trace
 import Data.Typeable
+import Data.ExprGADT.Eval
 import Data.ExprGADT.Types
 import Data.ExprGADT.Eval
 import Data.Profunctor as P
@@ -58,19 +59,19 @@ traverseExprLeaves f = go
              Lambda ef -> Lambda <$> traverseExprLeaves f' ef
 
     f' :: forall b c. ExprLeaf (c ': vs) b -> f (Expr (c ': us) b)
-    f' (Right o)      = shuffleVars' IS <$> f (Right o)
+    f' (Right o)      = shuffleVars IS <$> f (Right o)
     f' (Left IZ)      = pure $ V IZ
-    f' (Left (IS ix)) = shuffleVars' IS <$> f (Left ix)
+    f' (Left (IS ix)) = shuffleVars IS <$> f (Left ix)
 
-shuffleVars' :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
-shuffleVars' f = runIdentity . shuffleVarsA (Identity . f)
+-- shuffleVars' :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
+-- shuffleVars' f = runIdentity . shuffleVarsA' (Identity . f)
 
-shuffleVarsA' :: forall ks js a f. Applicative f => (forall k. Indexor ks k -> f (Indexor js k)) -> Expr ks a -> f (Expr js a)
-shuffleVarsA' f = traverseExprLeaves f'
-  where
-    f' :: forall b. ExprLeaf ks b -> f (Expr js b)
-    f' (Left ix) = V <$> f ix
-    f' (Right o) = pure $ O0 o
+-- shuffleVarsA' :: forall ks js a f. Applicative f => (forall k. Indexor ks k -> f (Indexor js k)) -> Expr ks a -> f (Expr js a)
+-- shuffleVarsA' f = traverseExprLeaves f'
+--   where
+--     f' :: forall b. ExprLeaf ks b -> f (Expr js b)
+--     f' (Left ix) = V <$> f ix
+--     f' (Right o) = pure $ O0 o
 
     -- upgrade :: forall t qs rs c. (forall b. Expr qs b -> f (Expr rs b)) -> Expr (t ': qs) c -> f (Expr (t ': rs) c)
     -- upgrade f' = go'
