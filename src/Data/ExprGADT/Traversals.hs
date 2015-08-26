@@ -3,16 +3,26 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
 
 module Data.ExprGADT.Traversals where
 
-import Data.Functor.Identity
-import Debug.Trace
-import Data.Typeable
 import Data.ExprGADT.Eval
 import Data.ExprGADT.Types
-import Data.ExprGADT.Eval
-import Data.Profunctor as P
+import Data.Functor.Identity
+import Data.Profunctor       as P
+import Data.Typeable
+import Debug.Trace
+
+over' :: ((a -> Identity b) -> c -> Identity d) -> (a -> b) -> c -> d
+over' l f = runIdentity . l (Identity . f)
+
+overRN :: ((forall a. p a -> Identity (r a)) -> c -> Identity d) -> (forall a. p a -> r a) -> c -> d
+overRN l f = runIdentity . l (Identity . f)
+
+overRN2 :: ((forall a b. p a b -> Identity (r a b)) -> c -> Identity d) -> (forall a b. p a b -> r a b) -> c -> d
+overRN2 l f = runIdentity . l (Identity . f)
+
 
 traverseIntLeaves :: forall vs a f. Applicative f => (Int -> f (Expr vs Int)) -> Expr vs a -> f (Expr vs a)
 traverseIntLeaves f = traverseExprO0 f'
@@ -40,6 +50,9 @@ traverseUnitLeaves f = traverseExprO0 f'
 -- O2's all the way down would definitely require Monad.
 
 type ExprLeaf vs a = Either (Indexor vs a) (Op0 a)
+
+overExprLeaves :: forall vs a. (forall us b. ExprLeaf us b -> Expr us b) -> Expr vs a -> Expr vs a
+overExprLeaves f = runIdentity . traverseExprLeaves (Identity . f)
 
 traverseExprLeaves :: forall vs a f. Applicative f => (forall us b. ExprLeaf us b -> f (Expr us b)) -> Expr vs a -> f (Expr vs a)
 traverseExprLeaves f = go
