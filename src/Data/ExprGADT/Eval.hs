@@ -105,8 +105,8 @@ collapse = overRN2 traverseExprPrePostM f
                             _                    -> if' eb ex ey
     collapseCase :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
     collapseCase ee el er = case ee of
-                              O1 (Con Left') ex  -> collapseAp el ex
-                              O1 (Con Right') ex -> collapseAp er ex
+                              O1 (Con Left') ex  -> el ~$ ex
+                              O1 (Con Right') ex -> er ~$ ex
                               _                  -> case' ee el er
     collapseUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
     collapseUnfoldrN en ef ez = case en of
