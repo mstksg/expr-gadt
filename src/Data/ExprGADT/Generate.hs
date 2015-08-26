@@ -60,18 +60,18 @@ etGenerators t = do
     p = 0.5
     generateConst :: forall b c us. EType c -> ExprGenerator m us (b -> c)
     generateConst t1 d = do
-        e <- shuffleVars IS <$> genFromEType t1 (d - 1)
+        e <- overIxors IS <$> genFromEType t1 (d - 1)
         return $ λ .-> e
     toIntFunction :: forall b us. m (Expr us b) -> m (Expr us (Int -> b))
     toIntFunction gx = do
-        e  <- shuffleVars IS <$> gx
+        e  <- overIxors IS <$> gx
         e' <- flip traverseIntLeaves e $ \i -> do
                 c <- (<= p) <$> getRandomR (0, 1)
                 return $ if c then V IZ else iI i
         return $ λ .-> e'
     toBoolFunction :: forall b us. m (Expr us b) -> m (Expr us (Bool -> b))
     toBoolFunction gx = do
-        e  <- shuffleVars IS <$> gx
+        e  <- overIxors IS <$> gx
         e' <- flip traverseBoolLeaves e $ \b -> do
                 c <- (<= p) <$> getRandomR (0, 1)
                 return $ if c then V IZ else bB b

@@ -10,6 +10,7 @@
 module Data.ExprGADT.Eval where
 
 import Debug.Trace
+import Data.ExprGADT.Traversals
 import Data.Functor.Identity
 import Data.ExprGADT.Types
 import Data.List (unfoldr)
@@ -145,24 +146,6 @@ subVariablesA f = go
     f' IZ      = pure $ V IZ
     f' (IS ix) = subVariables (V . IS) <$> f ix
 
-shuffleVars :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
-shuffleVars f = runIdentity . shuffleVarsA (pure . f)
-
-shuffleVarsA :: forall ks js a f. Applicative f => (forall k. Indexor ks k -> f (Indexor js k)) -> Expr ks a -> f (Expr js a)
-shuffleVarsA f = go
-  where
-    go :: forall b. Expr ks b -> f (Expr js b)
-    go e = case e of
-             V ix          -> V <$> f ix
-             O0 o          -> pure $ O0 o
-             O1 o e1       -> O1 o <$> go e1
-             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
-             O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef     -> Lambda <$> shuffleVarsA f' ef
-    f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
-    f' IZ      = pure IZ
-    f' (IS ix) = IS <$> f ix
-
 -- will this be good enough for monomorphic cases?
 -- might have to resort to doing something with Proxy and letting people
 -- manually state.
@@ -177,7 +160,7 @@ instance PushInto vs vs where
     pushInto = id
 
 instance PushInto vs us => PushInto vs (v ': us) where
-    pushInto = shuffleVars IS . pushInto
+    pushInto = overIxors IS . pushInto
 
 -- gives a pushing function for each layer introduced
 -- doesn't look good because requres $ cause existentials, so can't use .->
@@ -185,7 +168,7 @@ instance PushInto vs us => PushInto vs (v ': us) where
 λ' :: ((forall c. Expr vs c -> Expr (a ': vs) c)
    -> Expr (a ': vs) b)
    -> Expr vs (a -> b)
-λ' toPush = λ .-> toPush (shuffleVars IS)
+λ' toPush = λ .-> toPush (overIxors IS)
 
 -- gives a pushing function
 lambda' :: ((forall c. Expr vs c -> Expr (a ': vs) c)

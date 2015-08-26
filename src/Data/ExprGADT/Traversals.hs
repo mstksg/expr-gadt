@@ -7,7 +7,6 @@
 
 module Data.ExprGADT.Traversals where
 
-import Data.ExprGADT.Eval
 import Data.ExprGADT.Types
 import Data.Functor.Identity
 import Data.Profunctor       as P
@@ -76,7 +75,25 @@ traverseExprO0 f = go
              O1 o e1       -> O1 o <$> go e1
              O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef     -> Lambda <$> traverseExprO0 (fmap (shuffleVars IS) . f) ef
+             Lambda ef     -> Lambda <$> traverseExprO0 (fmap (overIxors IS) . f) ef
+
+overIxors :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
+overIxors = overRN traverseIxors
+
+traverseIxors :: forall ks js a f. Applicative f => (forall k. Indexor ks k -> f (Indexor js k)) -> Expr ks a -> f (Expr js a)
+traverseIxors f = go
+  where
+    go :: forall b. Expr ks b -> f (Expr js b)
+    go e = case e of
+             V ix          -> V <$> f ix
+             O0 o          -> pure $ O0 o
+             O1 o e1       -> O1 o <$> go e1
+             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
+             O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+             Lambda ef     -> Lambda <$> traverseIxors f' ef
+    f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
+    f' IZ      = pure IZ
+    f' (IS ix) = IS <$> f ix
 
 traverseExprPostM :: forall vs a m. Monad m => (forall b us. Expr us b -> m (Expr us b)) -> Expr vs a -> m (Expr vs a)
 traverseExprPostM f = go
