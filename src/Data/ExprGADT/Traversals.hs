@@ -88,7 +88,7 @@ traverseExprPostM f = go
                eλ' <- go eλ
                f $ Lambda eλ'
 
-traverseExprPost_ :: forall vs a f. Applicative f => (forall b us. Expr us b -> f ()) -> Expr vs a -> f ()
+traverseExprPost_ :: forall vs a c f. Applicative f => (forall b us. Expr us b -> f c) -> Expr vs a -> f ()
 traverseExprPost_ f = go
   where
     go :: forall b us. Expr us b -> f ()
@@ -99,9 +99,9 @@ traverseExprPost_ f = go
               O2 _ e1 e2 -> go e1 *> go e2
               O3 _ e1 e2 e3 -> go e1 *> go e2 *> go e3
               Lambda eλ -> go eλ
-           ) *> f e
+           ) <* f e
 
-traverseExprPre_ :: forall vs a f. Applicative f => (forall b us. Expr us b -> f ()) -> Expr vs a -> f ()
+traverseExprPre_ :: forall vs a c f. Applicative f => (forall b us. Expr us b -> f c) -> Expr vs a -> f ()
 traverseExprPre_ f = go
   where
     go :: forall b us. Expr us b -> f ()
@@ -112,4 +112,18 @@ traverseExprPre_ f = go
                     O2 _ e1 e2 -> go e1 *> go e2
                     O3 _ e1 e2 e3 -> go e1 *> go e2 *> go e3
                     Lambda eλ -> go eλ
+
+traverseExprPreM :: forall vs a m. Monad m => (forall b us. Expr us b -> m (Expr us b)) -> Expr vs a -> m (Expr vs a)
+traverseExprPreM f = go
+  where
+    go :: forall us b. Expr us b -> m (Expr us b)
+    go e = do
+      e' <- f e
+      case e' of
+        V _  -> return e'
+        O0 _ -> return e'
+        O1 o e1 -> O1 o <$> go e1
+        O2 o e1 e2 -> O2 o <$> go e1 <*> go e2
+        O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+        Lambda eλ -> Lambda <$> go eλ
 
