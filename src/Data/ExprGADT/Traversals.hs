@@ -157,3 +157,28 @@ traverseExprPreM f = go
         O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
         Lambda eλ     -> Lambda <$> go eλ
 
+traverseExprPrePostM :: forall vs a m. Monad m => (forall b us. Expr us b -> m (Expr us b)) -> Expr vs a -> m (Expr vs a)
+traverseExprPrePostM f = go
+  where
+    go :: forall us b. Expr us b -> m (Expr us b)
+    go e = do
+      e' <- f e
+      case e' of
+        V _           -> return e'
+        O0 _          -> return e'
+        O1 o e1       -> do
+          e1' <- go e1
+          f $ O1 o e1'
+        O2 o e1 e2    -> do
+          e1' <- go e1
+          e2' <- go e2
+          f $ O2 o e1' e2'
+        O3 o e1 e2 e3 -> do
+          e1' <- go e1
+          e2' <- go e2
+          e3' <- go e3
+          f $ O3 o e1' e2' e3'
+        Lambda eλ     -> do
+          eλ' <- go eλ
+          f $ Lambda eλ'
+

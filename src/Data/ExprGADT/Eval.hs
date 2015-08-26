@@ -48,85 +48,81 @@ reduceAll e | e == e'   = e'
 reduce :: Expr vs a -> Expr vs a
 reduce = collapse
 
-collapse :: forall vs a. Expr vs a -> Expr vs a
-collapse e = case e of
-               V ix              -> V ix
-               O0 o              -> O0 o
-               O1 o e1           -> case o of
-                                      Con o'     -> case e1 of
-                                                      O0 o'' -> case op1_ o' (op0 o'') of
-                                                                  Just x -> O0 x
-                                                                  _      -> O1 o (collapse e1)
-                                                      _      -> O1 o (collapse e1)
-                                      Dec Fst    -> collapseFst e1
-                                      Dec Snd    -> collapseSnd e1
-               O2 o e1 e2        -> case o of
-                                      Con o' -> case (e1, e2) of
-                                                  (O0 o''1, O0 o''2) ->
-                                                    case op2_ o' (op0 o''1) (op0 o''2) of
-                                                      Just x -> O0 x
-                                                      _      -> O2 o (collapse e1) (collapse e2)
-                                                  _   -> O2 o (collapse e1) (collapse e2)
-                                      Dec Mod -> collapseModDiv Mod e1 e2
-                                      Dec Div -> collapseModDiv Div e1 e2
-                                      Dec Ap  -> collapseAp e1 e2
-               O3 o e1 e2 e3     -> case o of
-                                      Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
-                                      Dec If       -> collapseIf e1 e2 e3
-                                      Dec Case     -> collapseCase e1 e2 e3
-                                      Dec UnfoldrN -> collapseUnfoldrN e1 e2 e3
-                                      Dec Foldr    -> collapseFoldr e1 e2 e3
-               Lambda eλ         -> Lambda (collapse eλ)
+collapse :: Expr vs a -> Expr vs a
+collapse = overRN2 traverseExprPrePostM f
   where
-    collapseFst :: Expr vs (b, c) -> Expr vs b
-    collapseFst e' = case collapse e' of
-                       O2 (Con Tup) e1 _ -> collapse e1
-                       _                 -> fst' (collapse e')
-    collapseSnd :: Expr vs (b, c) -> Expr vs c
-    collapseSnd e' = case collapse e' of
-                       O2 (Con Tup) _ e2 -> collapse e2
-                       _                 -> snd' (collapse e')
+    f :: forall vs a. Expr vs a -> Expr vs a
+    f e = case e of
+            V ix -> V ix
+            O0 o -> O0 o
+            O1 o e1 -> case o of
+                         Con o'     -> case e1 of
+                                         O0 o'' -> case op1_ o' (op0 o'') of
+                                                     Just x -> O0 x
+                                                     _      -> O1 o e1
+                                         _      -> O1 o e1
+                         Dec Fst    -> case e1 of
+                                         O2 (Con Tup) ex _ -> ex
+                                         _                 -> e
+                         Dec Snd    -> case e1 of
+                                         O2 (Con Tup) _ ey -> ey
+                                         _                 -> e
+            O2 o e1 e2 -> case o of
+                            Con o' -> case (e1, e2) of
+                                        (O0 o''1, O0 o''2) ->
+                                          case op2_ o' (op0 o''1) (op0 o''2) of
+                                            Just x -> O0 x
+                                            _      -> O2 o e1 e2
+                                        _   -> e
+                            Dec Mod -> collapseModDiv Mod e1 e2
+                            Dec Div -> collapseModDiv Div e1 e2
+                            Dec Ap  -> collapseAp e1 e2
+            O3 o e1 e2 e3 -> case o of
+                               Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
+                               Dec If       -> collapseIf e1 e2 e3
+                               Dec Case     -> collapseCase e1 e2 e3
+                               Dec UnfoldrN -> collapseUnfoldrN e1 e2 e3
+                               Dec Foldr    -> collapseFoldr e1 e2 e3
+            Lambda eλ -> Lambda eλ
     collapseModDiv :: Op2' Int Int (Maybe' Int) -> Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
     collapseModDiv o2 ex ey = case (ex, ey) of
                               (O0 (I x), O0 (I y)) -> case op2' o2 x y of
                                                         Left () -> O1 (Con Left') (O0 Unit)
                                                         Right z -> O1 (Con Right') (O0 (I z))
-                              _                    -> O2 (Dec o2) (collapse ex) (collapse ey)
-    collapseAp :: forall b c. Expr vs (b -> c) -> Expr vs b -> Expr vs c
-    collapseAp ef ex = case collapse ef of
-                         Lambda eλ -> collapse (subVariables apply eλ)
-                         _         -> collapse ef ~$ collapse ex
+                              _                    -> O2 (Dec o2) ex ey
+    collapseAp :: forall vs a b. Expr vs (a -> b) -> Expr vs a -> Expr vs b
+    collapseAp ef ex = case ef of
+                         Lambda eλ -> subVariables apply eλ
+                         _         -> ef ~$ ex
       where
-        apply :: forall d. Indexor (b ': vs) d -> Expr vs d
-        apply IZ      = collapse ex
+        apply :: forall c. Indexor (a ': vs) c -> Expr vs c
+        apply IZ      = ex
         apply (IS ix) = V ix
-    collapseIf :: Expr vs Bool -> Expr vs b -> Expr vs b -> Expr vs b
-    collapseIf eb ex ey = case collapse eb of
-                            O0 (B b) | b         -> collapse ex
-                                     | otherwise -> collapse ey
-                            _                    -> if' (collapse eb) (collapse ex) (collapse ey)
-
-    collapseCase :: Expr vs (Either b c) -> Expr vs (b -> d) -> Expr vs (c -> d) -> Expr vs d
-    collapseCase ee el er = case collapse ee of
-                              O1 (Con Left') ex  -> collapse (collapseAp el ex)
-                              O1 (Con Right') ex -> collapse (collapseAp er ex)
-                              _                  -> case' (collapse ee) (collapse el) (collapse er)
-    collapseUnfoldrN :: Expr vs Int -> Expr vs (b -> (c, b)) -> Expr vs b -> Expr vs [c]
-    collapseUnfoldrN en ef ez = case collapse en of
+    collapseIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
+    collapseIf eb ex ey = case eb of
+                            O0 (B b) | b         -> ex
+                                     | otherwise -> ey
+                            _                    -> if' eb ex ey
+    collapseCase :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
+    collapseCase ee el er = case ee of
+                              O1 (Con Left') ex  -> collapseAp el ex
+                              O1 (Con Right') ex -> collapseAp er ex
+                              _                  -> case' ee el er
+    collapseUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
+    collapseUnfoldrN en ef ez = case en of
                                 O0 (I i) | i <= 0    -> nil'
-                                         | otherwise -> collapse (unfold (i - 1))
-                                _                    -> unfoldrN' (collapse en) (collapse ef) (collapse ez)
+                                         | otherwise -> unfold (i - 1)
+                                _                    -> unfoldrN' en ef ez
       where
         unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
-                                                   (undefined ef)
+                                                   (overIxors IS ef)
                                                    (snd' (V IZ))
                    ) ~$ (ef ~$ ez)
-    collapseFoldr :: Expr vs (b -> c -> c) -> Expr vs c -> Expr vs [b] -> Expr vs c
-    collapseFoldr ef ez exs = case collapse exs of
-                                O0 Nil               -> collapse ez
-                                O2 (Con Cons) ey eys -> collapse $ ef ~$ ey
-                                                                      ~$ foldr' ef ez eys
-                                _                    -> foldr' (collapse ef) (collapse ez) (collapse exs)
+    collapseFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
+    collapseFoldr ef ez exs = case exs of
+                                O0 Nil               -> ez
+                                O2 (Con Cons) ey eys -> ef ~$ ey ~$ foldr' ef ez eys
+                                _                    -> foldr' ef ez exs
 
 subVariables :: forall vs us a. (forall b. Indexor vs b -> Expr us b) -> Expr vs a -> Expr us a
 subVariables f = runIdentity . subVariablesA (Identity . f)
