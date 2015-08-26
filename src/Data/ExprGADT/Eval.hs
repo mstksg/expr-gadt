@@ -43,47 +43,42 @@ reduceAll :: Expr vs a -> Expr vs a
 reduceAll e | e == e'   = e'
             | otherwise = reduceAll e'
   where
-    e' = collapse e
-
-reduce :: Expr vs a -> Expr vs a
-reduce = collapse
+    e' = overRN2 traverseExprPrePostM collapse e
 
 collapse :: Expr vs a -> Expr vs a
-collapse = overRN2 traverseExprPrePostM f
+collapse e = case e of
+               V ix -> V ix
+               O0 o -> O0 o
+               O1 o e1 -> case o of
+                            Con o'     -> case e1 of
+                                            O0 o'' -> case op1_ o' (op0 o'') of
+                                                        Just x -> O0 x
+                                                        _      -> O1 o e1
+                                            _      -> O1 o e1
+                            Dec Fst    -> case e1 of
+                                            O2 (Con Tup) ex _ -> ex
+                                            _                 -> e
+                            Dec Snd    -> case e1 of
+                                            O2 (Con Tup) _ ey -> ey
+                                            _                 -> e
+               O2 o e1 e2 -> case o of
+                               Con o' -> case (e1, e2) of
+                                           (O0 o''1, O0 o''2) ->
+                                             case op2_ o' (op0 o''1) (op0 o''2) of
+                                               Just x -> O0 x
+                                               _      -> O2 o e1 e2
+                                           _   -> e
+                               Dec Mod -> collapseModDiv Mod e1 e2
+                               Dec Div -> collapseModDiv Div e1 e2
+                               Dec Ap  -> collapseAp e1 e2
+               O3 o e1 e2 e3 -> case o of
+                                  Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
+                                  Dec If       -> collapseIf e1 e2 e3
+                                  Dec Case     -> collapseCase e1 e2 e3
+                                  Dec UnfoldrN -> collapseUnfoldrN e1 e2 e3
+                                  Dec Foldr    -> collapseFoldr e1 e2 e3
+               Lambda eλ -> Lambda eλ
   where
-    f :: forall vs a. Expr vs a -> Expr vs a
-    f e = case e of
-            V ix -> V ix
-            O0 o -> O0 o
-            O1 o e1 -> case o of
-                         Con o'     -> case e1 of
-                                         O0 o'' -> case op1_ o' (op0 o'') of
-                                                     Just x -> O0 x
-                                                     _      -> O1 o e1
-                                         _      -> O1 o e1
-                         Dec Fst    -> case e1 of
-                                         O2 (Con Tup) ex _ -> ex
-                                         _                 -> e
-                         Dec Snd    -> case e1 of
-                                         O2 (Con Tup) _ ey -> ey
-                                         _                 -> e
-            O2 o e1 e2 -> case o of
-                            Con o' -> case (e1, e2) of
-                                        (O0 o''1, O0 o''2) ->
-                                          case op2_ o' (op0 o''1) (op0 o''2) of
-                                            Just x -> O0 x
-                                            _      -> O2 o e1 e2
-                                        _   -> e
-                            Dec Mod -> collapseModDiv Mod e1 e2
-                            Dec Div -> collapseModDiv Div e1 e2
-                            Dec Ap  -> collapseAp e1 e2
-            O3 o e1 e2 e3 -> case o of
-                               Con _        -> forbidden e "There aren't even any constructors for Op3.  How absurd."
-                               Dec If       -> collapseIf e1 e2 e3
-                               Dec Case     -> collapseCase e1 e2 e3
-                               Dec UnfoldrN -> collapseUnfoldrN e1 e2 e3
-                               Dec Foldr    -> collapseFoldr e1 e2 e3
-            Lambda eλ -> Lambda eλ
     collapseModDiv :: Op2' Int Int (Maybe' Int) -> Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
     collapseModDiv o2 ex ey = case (ex, ey) of
                               (O0 (I x), O0 (I y)) -> case op2' o2 x y of
