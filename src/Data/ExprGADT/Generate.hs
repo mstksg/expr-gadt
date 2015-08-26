@@ -1,6 +1,5 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
@@ -16,12 +15,6 @@ import Data.ExprGADT.Eval
 import Data.Bifunctor
 import Data.ExprGADT.Traversals
 import Control.Monad
-
-data Chain :: (* -> *) -> * -> * -> * where
-    CLeaf :: p (a -> b) -> Chain p a b
-    CNode :: Chain p a b -> Chain p b c -> Chain p a c
-
-type EChain = Chain EType
 
 type ExprGenerator m vs a = Int -> m (Expr vs a)
 
