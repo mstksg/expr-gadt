@@ -459,3 +459,6 @@ eTypeDepth (EList x) = 1 + eTypeDepth x
 eTypeDepth (EEither x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
 eTypeDepth (ETup x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
 eTypeDepth (EFunc x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+
+absurdIxor :: Indexor '[] a -> b
+absurdIxor ix = ix `seq` let x = x in x

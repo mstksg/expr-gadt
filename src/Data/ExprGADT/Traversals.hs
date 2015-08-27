@@ -22,7 +22,6 @@ overRN l f = runIdentity . l (Identity . f)
 overRN2 :: ((forall a b. p a b -> Identity (r a b)) -> c -> Identity d) -> (forall a b. p a b -> r a b) -> c -> d
 overRN2 l f = runIdentity . l (Identity . f)
 
-
 traverseIntLeaves :: forall vs a f. Applicative f => (Int -> f (Expr vs Int)) -> Expr vs a -> f (Expr vs a)
 traverseIntLeaves f = traverseExprO0 f'
   where
@@ -181,4 +180,3 @@ traverseExprPrePostM f = go
         Lambda eλ     -> do
           eλ' <- go eλ
           f $ Lambda eλ'
-

@@ -25,7 +25,7 @@ evalWith :: forall vs a. HList vs -> Expr vs a -> a
 evalWith vs = go
   where
     go :: forall b. Expr vs b -> b
-    go e = case reduceAll e of
+    go e = case e of
              V ix                -> subIndexor vs ix
              O0 o                -> op0 o
              O1 o e1             -> onO op1 op1' o (go e1)
@@ -33,11 +33,27 @@ evalWith vs = go
              O3 o e1 e2 e3       -> onO op3 op3' o (go e1) (go e2) (go e3)
              Lambda ef           -> \x -> evalWith (x :< vs) ef
 
+cataLeaves :: forall vs a. (forall b. ExprLeaf vs b -> b) -> Expr vs a -> a
+cataLeaves f = go
+  where
+    go :: forall b. Expr vs b -> b
+    go e = case e of
+             V ix          -> f (Left ix)
+             O0 o          -> f (Right o)
+             O1 o e1       -> onO op1 op1' o (go e1)
+             O2 o e1 e2    -> onO op2 op2' o (go e1) (go e2)
+             O3 o e1 e2 e3 -> onO op3 op3' o (go e1) (go e2) (go e3)
+             Lambda ef     -> \x -> cataLeaves (f' x) ef
+    f' :: forall b v. v -> ExprLeaf (v ': vs) b -> b
+    f' x (Left ix) = case ix of
+                       IZ     -> x
+                       IS ix' -> f (Left ix')
+    f' _ (Right o) = f (Right o)
+
 subIndexor :: forall ks. HList ks -> (forall v. Indexor ks v -> v)
 subIndexor (x :< _ ) IZ      = x
 subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
 subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
-
 
 reduceAll :: Expr vs a -> Expr vs a
 reduceAll e | e == e'   = e'
