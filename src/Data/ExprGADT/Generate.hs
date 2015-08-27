@@ -7,7 +7,6 @@
 module Data.ExprGADT.Generate where
 
 import Control.Monad.Random
-import Debug.Trace
 import Control.Applicative
 import Data.ExprGADT.Types
 import Data.ExprGADT.Expr

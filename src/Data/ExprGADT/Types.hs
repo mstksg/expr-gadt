@@ -208,7 +208,7 @@ instance Eq (HList '[]) where
     HNil == HNil = True
 
 instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
-    x :< xs == y :< ys = x == y && xs == ys
+    (x :< xs) == (y :< ys) = x == y && xs == ys
 
 eTypeEq :: EType a -> EType b -> Bool
 eTypeEq EInt EInt                     = True
@@ -431,3 +431,7 @@ eTypeDepth (EFunc x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
 
 absurdIxor :: Indexor '[] a -> b
 absurdIxor ix = ix `seq` let x = x in x
+
+indexorLength :: Indexor vs a -> Int
+indexorLength IZ = 0
+indexorLength (IS ix) = 1 + indexorLength ix

@@ -9,7 +9,6 @@
 
 module Data.ExprGADT.Eval where
 
-import Debug.Trace
 import Data.ExprGADT.Traversals
 import Data.Functor.Identity
 import Data.ExprGADT.Types
@@ -57,7 +56,7 @@ reduceAll :: Expr vs a -> Expr vs a
 reduceAll e | e == e'   = e'
             | otherwise = reduceAll e'
   where
-    e' = overRN2 traverseExprPrePostM collapse e
+    Identity e' = traverseExprPrePostM (Identity . collapse) e
 
 collapse :: Expr vs a -> Expr vs a
 collapse e = case e of
