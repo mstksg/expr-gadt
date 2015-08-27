@@ -33,22 +33,20 @@ evalWith vs = go
              O3 o e1 e2 e3       -> onO op3 op3' o (go e1) (go e2) (go e3)
              Lambda ef           -> \x -> evalWith (x :< vs) ef
 
-cataLeaves :: forall vs a f. Applicative f => (forall b. ExprLeaf vs b -> f b) -> Expr vs a -> f a
-cataLeaves f = go
+evalWith' :: forall vs a. (forall b. Indexor vs b -> b) -> Expr vs a -> a
+evalWith' f = go
   where
-    go :: forall b. Expr vs b -> f b
+    go :: forall b. Expr vs b -> b
     go e = case e of
-             V ix          -> f (Left ix)
-             O0 o          -> f (Right o)
-             O1 o e1       -> onO op1 op1' o <$> go e1
-             O2 o e1 e2    -> onO op2 op2' o <$> go e1 <*> go e2
-             O3 o e1 e2 e3 -> onO op3 op3' o <$> go e1 <*> go e2 <*> go e3
-             Lambda ef     -> subber ef
-    subber :: forall v b. Expr (v ': vs) b -> f (v -> b)
-    subber (V IZ) = pure id
-    subber (V (IS ix)) = const <$> f (Left ix)
-    subber (O0 o) = const <$> f (Right o)
-    subber e = subber e'  -- :'(
+             V ix                -> f ix
+             O0 o                -> op0 o
+             O1 o e1             -> onO op1 op1' o (go e1)
+             O2 o e1 e2          -> onO op2 op2' o (go e1) (go e2)
+             O3 o e1 e2 e3       -> onO op3 op3' o (go e1) (go e2) (go e3)
+             Lambda ef           -> \x -> evalWith' (f' x) ef
+    f' :: forall b v. v -> Indexor (v ': vs) b -> b
+    f' x IZ      = x
+    f' _ (IS ix) = f ix
 
 subIndexor :: forall ks. HList ks -> (forall v. Indexor ks v -> v)
 subIndexor (x :< _ ) IZ      = x
