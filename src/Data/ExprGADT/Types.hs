@@ -7,11 +7,13 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.ExprGADT.Types where
 
 import Data.Proxy
+import Data.Monoid
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
@@ -71,13 +73,25 @@ data EType :: * -> * where
   EInt :: EType Int
   EBool :: EType Bool
   EUnit :: EType ()
-  ETup :: EType a -> EType b -> EType (a, b)
   EEither :: EType a -> EType b -> EType (Either a b)
+  ETup :: EType a -> EType b -> EType (a, b)
   EFunc :: EType a -> EType b -> EType (a -> b)
   EList :: EType a -> EType [a]
 
-data ExprW :: * where
-    EW :: EType a -> Expr '[] a -> ExprW
+data ETList :: [*] -> * where
+    ENil :: ETList '[]
+    (:*) :: EType a -> ETList as -> ETList (a ': as)
+
+infixr 5 :*
+
+-- data ExprW :: * where
+--     EW :: EType a -> Expr '[] a -> ExprW
+
+-- data ExprW :: * where
+--     EW :: ETList vs -> EType a -> Expr vs a -> ExprW
+
+-- data ExprIxW :: * -> * where
+--     EIW :: ETList vs -> Expr vs a -> ExprIxW a
 
 data ETypeW :: * where
     ETW :: EType a -> ETypeW
@@ -88,7 +102,9 @@ deriving instance Show (Op1 a b)
 deriving instance Show (Op2 a b c)
 deriving instance Show (Op3 a b c d)
 deriving instance Show (EType a)
-deriving instance Show ExprW
+deriving instance Show (ETList a)
+-- deriving instance Show (ExprIxW a)
+-- deriving instance Show ExprW'
 deriving instance Show ETypeW
 deriving instance Eq (Indexor ks k)
 deriving instance Eq (Op0 a)
@@ -96,7 +112,7 @@ deriving instance Eq (Op1 a b)
 deriving instance Eq (Op2 a b c)
 deriving instance Eq (Op3 a b c d)
 -- deriving instance Eq (EType a)
--- deriving instance Eq ExprW
+-- deriving instance Eq ExprW'
 
 class ToExpr a where
     toExpr :: a -> Expr vs a
@@ -211,14 +227,9 @@ instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
     (x :< xs) == (y :< ys) = x == y && xs == ys
 
 eTypeEq :: EType a -> EType b -> Bool
-eTypeEq EInt EInt                     = True
-eTypeEq EBool EBool                   = True
-eTypeEq EUnit EUnit                   = True
-eTypeEq (EList x) (EList y)           = eTypeEq x y
-eTypeEq (ETup x y) (ETup x' y')       = eTypeEq x x' && eTypeEq y y'
-eTypeEq (EEither x y) (EEither x' y') = eTypeEq x x' && eTypeEq y y'
-eTypeEq (EFunc x y) (EFunc x' y')     = eTypeEq x x' && eTypeEq y y'
-eTypeEq _ _                           = False
+eTypeEq a b = case compareEType a b of
+                EQ -> True
+                _  -> False
 
 instance Eq (EType a) where
     (==) = eTypeEq
@@ -257,6 +268,44 @@ instance (Show a, Show (HList as)) => Show (HList (a ': as)) where
     showsPrec p (x :< xs) = showParen (p > 5) $ showsPrec 6 x
                                               . showString " :< "
                                               . showsPrec 5 xs
+
+compareEType :: EType a -> EType b -> Ordering
+
+compareEType EUnit         EUnit         = EQ
+compareEType EUnit         _             = LT
+compareEType _             EUnit         = GT
+compareEType EBool         EBool         = EQ
+compareEType EBool         _             = LT
+compareEType _             EBool         = GT
+compareEType EInt          EInt          = EQ
+compareEType EInt          _             = LT
+compareEType _             EInt          = GT
+compareEType (EEither a b) (EEither c d) = compareEType a b <> compareEType c d
+compareEType (EEither _ _) _             = LT
+compareEType _             (EEither _ _) = GT
+compareEType (ETup a b)    (ETup c d)    = compareEType a b <> compareEType c d
+compareEType (ETup _ _)    _             = LT
+compareEType _             (ETup _ _)    = GT
+compareEType (EFunc a b)   (EFunc c d)   = compareEType a b <> compareEType c d
+compareEType (EFunc _ _)   _             = LT
+compareEType _             (EFunc _ _)   = GT
+compareEType (EList a)     (EList b)     = compareEType a b
+
+instance Ord (EType a) where
+    compare = compareEType
+
+-- eTypeSize :: EType a -> Int -> Int
+-- eTypeSize t = case t of
+--                 EUnit -> 0 ~~> 1
+--                 EBool -> 0 ~~> 2
+--                 EInt  -> 1 ~~> 1
+--                 EEither a b -> (+) <$> eTypeSize a <*> eTypeSize b
+--                 ETup a b -> \i -> sum . map (\j -> eTypeSize b j * eTypeSize a (i - j)) $ [0..i]
+--                 EList a -> eTypeSize a . subtract 1
+--   where
+--     (~~>) :: Int -> Int -> Int -> Int
+--     (i ~~> x) j | j == i    = x
+--                 | otherwise = 0
 
 exprLeafCount :: Expr vs a -> Int
 exprLeafCount e = case e of

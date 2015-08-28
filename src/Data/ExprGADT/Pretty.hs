@@ -2,7 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Data.ExprGADT.Pretty where
+module Data.ExprGADT.Pretty (showPretty, printPretty) where
 
 import Data.ExprGADT.Types
 import Control.Monad.State
@@ -20,10 +20,13 @@ data VarStack = VS { vsBound :: [Var]
 
 data Fixity = InfixL | InfixR | Infix deriving Eq
 
-data Operator = Opr { oprFixity :: Fixity
-                    , oprPrec   :: Int
-                    , oprShow   :: String
+data Operator = Opr { _oprFixity :: Fixity
+                    , _oprPrec   :: Int
+                    , _oprShow   :: String
                     }
+
+printPretty :: Expr vs x -> IO ()
+printPretty = putStrLn . showPretty
 
 showPretty :: Expr vs x -> String
 showPretty e = envOut . res 0 $ ""

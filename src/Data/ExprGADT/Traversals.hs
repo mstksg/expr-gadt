@@ -9,9 +9,6 @@ module Data.ExprGADT.Traversals where
 
 import Data.ExprGADT.Types
 import Data.Functor.Identity
-import Data.Profunctor       as P
-import Data.Typeable
-import Debug.Trace
 
 over' :: ((a -> Identity b) -> c -> Identity d) -> (a -> b) -> c -> d
 over' l f = runIdentity . l (Identity . f)
