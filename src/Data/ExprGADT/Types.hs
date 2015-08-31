@@ -87,8 +87,8 @@ infixr 5 :*
 -- data ExprW :: * where
 --     EW :: EType a -> Expr '[] a -> ExprW
 
--- data ExprW :: * where
---     EW :: ETList vs -> EType a -> Expr vs a -> ExprW
+data ExprW :: * where
+    EW :: ETList vs -> EType a -> Expr vs a -> ExprW
 
 -- data ExprIxW :: * -> * where
 --     EIW :: ETList vs -> Expr vs a -> ExprIxW a
@@ -105,6 +105,7 @@ deriving instance Show (EType a)
 deriving instance Show (ETList a)
 -- deriving instance Show (ExprIxW a)
 -- deriving instance Show ExprW'
+deriving instance Show ExprW
 deriving instance Show ETypeW
 deriving instance Eq (Indexor ks k)
 deriving instance Eq (Op0 a)
@@ -484,3 +485,18 @@ absurdIxor ix = ix `seq` let x = x in x
 indexorLength :: Indexor vs a -> Int
 indexorLength IZ = 0
 indexorLength (IS ix) = 1 + indexorLength ix
+
+enumTypes :: [ETypeW]
+enumTypes = concatMap enumTypesD [0..]
+
+enumTypesD :: Int -> [ETypeW]
+enumTypesD n | n <= 0 = [ETW EInt, ETW EBool, ETW EUnit]
+             | otherwise = mkList ++ mkOthers
+  where
+    mkList = do
+      ETW t1 <- enumTypesD (n - 1)
+      return $ ETW (EList t1)
+    mkOthers = do
+      ETW t1 <- enumTypesD (n - 1)
+      ETW t2 <- enumTypesD (n - 1)
+      [ETW (EEither t1 t2), ETW (ETup t1 t2), ETW (EFunc t1 t2)]
