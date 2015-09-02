@@ -12,319 +12,285 @@
 
 module Data.ExprGADT.Dumb where
 
--- import Data.ExprGADT.Traversals
--- import Data.List
--- import Data.Map.Strict           (Map)
--- import Data.Proxy
--- import GHC.TypeLits
--- import qualified Data.Map.Strict
-import Control.Applicative
+import Control.Arrow
 import Control.Monad.Except
+import qualified Data.Set as S
+import Data.Set (Set)
+import Data.List (nub)
 import Control.Monad.Reader
+import Control.Monad.State
+import Control.Monad.Writer
+import Control.Monad.RWS
 import Data.ExprGADT.Types
-import Data.Maybe
-import Data.Singletons
+import Data.Map             (Map)
+import Data.Monoid
+import qualified Data.Map   as M
 
-data PNat = NZ | NS PNat
+newtype TVar = TV String
+             deriving (Show, Eq, Ord)
 
-data instance Sing (a :: PNat) where
-    SNZ :: Sing 'NZ
-    SNS :: Sing (a :: PNat) -> Sing ('NS a)
-
-data IxNat :: PNat -> * where
-    INZ :: IxNat n
-    INS :: IxNat n -> IxNat ('NS n)
-
-data TExpr :: PNat -> * where
-    TEV :: IxNat ('NS n) -> TExpr n
-    TEO0 :: EType a -> TExpr n
-    TEO1 :: TOp1 -> TExpr n -> TExpr n
-    TEO2 :: TOp2 -> TExpr n -> TExpr n -> TExpr n
-    TEScheme :: TExpr ('NS n) -> TExpr n
-
-data TExprW :: * where
-    TEW :: Sing n -> TExpr n -> TExprW
+data TExpr :: * where
+    TEV      :: TVar    -> TExpr
+    TEO0     :: Show a => EType a -> TExpr
+    TEO1     :: TOp1    -> TExpr -> TExpr
+    TEO2     :: TOp2    -> TExpr -> TExpr -> TExpr
 
 data TOp1 :: * where
     TOList :: TOp1
+  deriving (Show, Eq)
 
 data TOp2 :: * where
     TOFunc :: TOp2
     TOEither :: TOp2
     TOTuple :: TOp2
+  deriving (Show, Eq)
 
-type Var = Int
+data Scheme = Forall [TVar] TExpr
+            deriving Show
 
-data DumbExpr :: * where
-    DV      :: Maybe (TExpr 'NZ) -> Var         -> DumbExpr
-    DO0     :: Maybe (TExpr 'NZ) -> Op0 a       -> DumbExpr
-    DO1     :: Maybe (TExpr 'NZ) -> Op1 a b     -> DumbExpr -> DumbExpr
-    DO2     :: Maybe (TExpr 'NZ) -> Op2 a b c   -> DumbExpr -> DumbExpr -> DumbExpr
-    DO3     :: Maybe (TExpr 'NZ) -> Op3 a b c d -> DumbExpr -> DumbExpr -> DumbExpr -> DumbExpr
-    DLambda :: Maybe (TExpr 'NZ) -> Var         -> DumbExpr -> DumbExpr
-
-dumbExprT :: DumbExpr -> Maybe (TExpr 'NZ)
-dumbExprT (DV t _) = t
-dumbExprT (DO0 t _) = t
-dumbExprT (DO1 t _ _) = t
-dumbExprT (DO2 t _ _ _) = t
-dumbExprT (DO3 t _ _ _ _) = t
-dumbExprT (DLambda t _ _) = t
+newtype InferState = InferState { count :: Int }
 
 data TypeError :: * where
-    TErrUnbound :: Int -> TypeError
-    TErrMismatch :: TExpr n -> TExpr m -> TypeError
-    TErrUnexpected :: String -> TypeError
+    TErrUnbound :: Name -> TypeError
+    TErrInfType :: TVar -> TExpr -> TypeError
+    TErrMismatch :: [TExpr] -> [TExpr] -> TypeError
+    TErrUniFail :: TExpr -> TExpr -> TypeError
+  deriving Show
+    -- TErrUnexpected :: String -> TypeError
+
+newtype Subst = Subst (Map TVar TExpr)
+
+instance Monoid Subst where
+    mempty = Subst M.empty
+    mappend (Subst x) (Subst y) = Subst $ fmap apl y `M.union` x
+      where
+        apl = applyTExpr (Subst x)
+
+type Name = String
+type Constraint = (TExpr, TExpr)
+type Unifier = (Subst, [Constraint])
+
+data Env = TypeEnv { types :: Map Name Scheme }
+
+instance Monoid Env where
+    mempty = TypeEnv M.empty
+    mappend (TypeEnv x) (TypeEnv y) = TypeEnv (M.union x y)
+
+data DumbExpr :: * where
+    DV      :: Name        -> DumbExpr
+    DO0     :: Op0 a       -> DumbExpr
+    DO1     :: Op1 a b     -> DumbExpr -> DumbExpr
+    DO2     :: Op2 a b c   -> DumbExpr -> DumbExpr -> DumbExpr
+    DO3     :: Op3 a b c d -> DumbExpr -> DumbExpr -> DumbExpr -> DumbExpr
+    DLambda :: Name        -> DumbExpr -> DumbExpr
 
 deriving instance Show DumbExpr
-deriving instance Show TypeError
-deriving instance Show (IxNat n)
-deriving instance Show (TExpr n)
-deriving instance Show TOp1
-deriving instance Show TOp2
-deriving instance Show TExprW
-deriving instance Show (Sing (n :: PNat))
+deriving instance Show TExpr
 
-type Env = [TExpr 'NZ]
+instance Eq TExpr where
+    TEV v  == TEV u  = v == u
+    TEO0 t == TEO0 s = eTypeEq t s
+    TEO1 o1 t1 == TEO1 o2 t2 = o1 == o2 && t1 == t2
+    TEO2 o1 t1 t1' == TEO2 o2 t2 t2' = o1 == o2 && t1 == t2 && t1' == t2'
+    _ == _ = False
 
-fillInTypes :: (MonadError TypeError m, MonadReader Env m) => DumbExpr -> m DumbExpr
-fillInTypes e =
-    case e of
-      DO0 t0 o -> return $ case o of
-                    I _ -> DO0 (Just (TEO0 EInt)) o
-                    B _ -> DO0 (Just (TEO0 EBool)) o
-                    Unit -> DO0 (Just (TEO0 EUnit)) o
-                    Nil -> DO0 (t0 <|> Just (TEScheme (TEO1 TOList (TEV INZ)))) o
-      DO1 t0 o e1 -> case o of
-                       Abs -> do
-                         e1' <- fillInTypes e
-                         case dumbExprT e1' of
-                           Just (TEO0 EInt) -> return $ DO1 (Just (TEO0 EInt)) o e1'
-                           Just t -> throwError $ TErrMismatch (TEO0 EInt) t
-                           Nothing -> throwError $ TErrUnexpected "Unexpected non-Just from fillInTypes..."
+varNames :: [Name]
+varNames = [ v : if n == 0 then "" else show (n :: Int)
+           | n <- [0..]
+           , v <- "xyzhijklmnpqrstuvw"]
 
+runInfer :: Env -> RWST Env [Constraint] [Name] (Either TypeError) TExpr -> Either TypeError (TExpr, [Constraint])
+runInfer env m = evalRWST m env varNames
 
+inferExpr :: Env -> DumbExpr -> Either TypeError Scheme
+inferExpr env ex = do
+    (ty, cs) <- runInfer env (infer ex)
+    subst <- solver (mempty, cs)
+    return $ closeOver (applyTExpr subst ty)
+  where
+    closeOver = normalize . generalize (TypeEnv M.empty)
+    normalize (Forall _ body) = Forall (map snd ord') (normtype body)
+      where
+        ord' = zip (nub (fv body)) (map TV varNames)
+        fv (TEV a) = [a]
+        fv (TEO0 _) = []
+        fv (TEO1 _ e1) = fv e1
+        fv (TEO2 _ e1 e2) = fv e1 ++ fv e2
 
--- infer :: (MonadError TypeError m, MonadReader Env m) => DumbExpr -> m (TExpr 'NZ)
--- infer e = case e of
---             DV i -> do
---               l <- asks $ \ts -> listToMaybe $ drop i ts
---               maybe (throwError (TErrUnbound i)) return l
---             DO0 o -> return $ case o of
---                        I _ -> TEO0 EInt
---                        B _ -> TEO0 EBool
---                        Unit -> TEO0 EUnit
---                        Nil -> TEScheme (TEO1 TOList (TEV INZ))
---                        -- Nil -> TEW (SNS SNZ) (TEO1 TOList (TEV INZ))
---             DO1 o e1 -> case o of
---                           Abs -> do
---                             t <- infer e1
---                             undefined
-
-mkInt :: TExpr 'NZ -> Maybe (TExpr 'NZ)
-mkInt te = case te of
-             TEO0 EInt -> Just te
-             TEScheme (TEV INZ) -> undefined
-             -- how do toher things do this?
-             _   -> Nothing
-    -- TEScheme :: TExpr ('NS n) -> TExpr n
-             -- TEO0 _ -> Nothing
+        normtype (TEO0 o) = TEO0 o
+        normtype (TEO1 o e1) = TEO1 o (normtype e1)
+        normtype (TEO2 o e1 e2) = TEO2 o (normtype e1) (normtype e2)
+        normtype (TEV v) = case lookup v ord' of
+                             Just x -> TEV x
+                             Nothing -> error "type variable not in signature, what gives"
+    generalize env' t = Forall as t
+      where
+        as = S.toList $ ftvTExpr t `S.difference` ftvEnv env'
+        ftvEnv = S.unions . map ftvScheme . M.elems . types
+    ftvScheme (Forall as t) = ftvTExpr t `S.difference` S.fromList as
 
 
+infer :: (MonadError TypeError m, MonadReader Env m, MonadState [Name] m, MonadWriter [Constraint] m) => DumbExpr -> m TExpr
+infer e = case e of
+            DV v -> lookupEnv v
 
--- type Env = [Scheme]
+            DO0 o -> case o of
+                       I _ -> pure (TEO0 EInt)
+                       B _ -> pure (TEO0 EBool)
+                       Unit -> pure (TEO0 EUnit)
+                       Nil -> do
+                         t1 <- fresh
+                         tv <- fresh
+                         uni (TEO1 TOList t1) tv
+                         return tv
+            DO1 o e1 -> do
+              t1 <- infer e1
+              tv <- fresh
+              let u1 = t1 `tFunc` tv
+              u2 <- case o of
+                      Abs -> return $ tInt `tFunc` tInt
+                      Signum -> return $ tInt `tFunc` tInt
+                      Not -> return $ tBool `tFunc` tBool
+                      Left' -> do
+                        tr <- fresh
+                        return $ t1 `tFunc` TEO2 TOEither t1 tr
+                      Right' -> do
+                        tl <- fresh
+                        return $ t1 `tFunc` TEO2 TOEither tl t1
+                      Fst -> do
+                        tfst <- fresh
+                        tsnd <- fresh
+                        uni t1 (TEO2 TOTuple tfst tsnd)
+                        return $ t1 `tFunc` tfst
+                      Snd -> do
+                        tfst <- fresh
+                        tsnd <- fresh
+                        uni t1 (TEO2 TOTuple tfst tsnd)
+                        return $ t1 `tFunc` tsnd
+              uni u1 u2
+              return tv
+            DO2 o e1 e2 -> do
+              t1 <- infer e1
+              t2 <- infer e2
+              tv <- fresh
+              let u1 = t1 `tFunc` (t2 `tFunc` tv)
+              u2 <- case o of
+                      Plus    -> return $ tInt `tFunc` (tInt `tFunc` tInt)
+                      Times   -> return $ tInt `tFunc` (tInt `tFunc` tInt)
+                      Minus   -> return $ tInt `tFunc` (tInt `tFunc` tInt)
+                      LEquals -> return $ tInt `tFunc` (tInt `tFunc` tBool)
+                      And     -> return $ tBool `tFunc` (tBool `tFunc` tBool)
+                      Or      -> return $ tBool `tFunc` (tBool `tFunc` tBool)
+                      Tup     -> return $ t1 `tFunc` (t2 `tFunc` TEO2 TOTuple t1 t2)
+                      Cons    -> return $ t1 `tFunc` (TEO1 TOList t1 `tFunc` TEO1 TOList t1)
+                      Ap      -> do
+                        t3 <- fresh
+                        uni t1 (TEO2 TOFunc t2 t3)
+                        return $ t1 `tFunc` (t2 `tFunc` t3)
+                      Div     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 EUnit) tInt)
+                      Mod     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 EUnit) tInt)
+              uni u1 u2
+              return tv
+            DO3 o e1 e2 e3 -> do
+              t1 <- infer e1
+              t2 <- infer e2
+              t3 <- infer e3
+              tv <- fresh
+              let u1 = t1 `tFunc` (t2 `tFunc` (t3 `tFunc` tv))
+              u2 <- case o of
+                      If -> do
+                        uni t2 t3
+                        return $ tBool `tFunc` (t2 `tFunc` (t2 `tFunc` t2))
+                      Case -> do
+                        ta <- fresh
+                        tb <- fresh
+                        tc <- fresh
+                        uni t2 (ta `tFunc` tc)
+                        uni t3 (tb `tFunc` tc)
+                        uni t1 (TEO2 TOEither ta tb)
+                        return $ t1 `tFunc` (t2 `tFunc` (t3 `tFunc` tc))
+                      UnfoldrN -> do
+                        tb <- fresh
+                        uni t2 (t3 `tFunc` TEO2 TOTuple tb t3)
+                        return $ tInt `tFunc` (t2 `tFunc` (t3 `tFunc` TEO1 TOList tb))
+                      Foldr -> do
+                        ta <- fresh
+                        uni t1 (ta `tFunc` (t2 `tFunc` t2))
+                        uni t3 (TEO1 TOList ta)
+                        return $ t1 `tFunc` (t2 `tFunc` (t3 `tFunc` t2))
+              uni u1 u2
+              return tv
+            DLambda x e1 -> do
+              tv <- fresh
+              t <- inEnv (x, Forall [] tv) (infer e1)
+              return (tv `tFunc` t)
+  where
+    tInt = TEO0 EInt
+    tBool = TEO0 EBool
+    tFunc = TEO2 TOFunc
+    uni :: MonadWriter [Constraint] m => TExpr -> TExpr -> m ()
+    uni t1 t2 = tell [(t1, t2)]
+    lookupEnv :: (MonadState [Name] m, MonadError TypeError m, MonadReader Env m) => Name -> m TExpr
+    lookupEnv x = do
+        TypeEnv env <- ask
+        case M.lookup x env of
+          Nothing -> throwError $ TErrUnbound x
+          Just t -> instantiate t
+    instantiate :: MonadState [Name] m => Scheme -> m TExpr
+    instantiate (Forall as t) = do
+        as' <- mapM (const fresh) as
+        let s = Subst $ M.fromList (zip as as')
+        return $ applyTExpr s t
+    inEnv :: MonadReader Env m => (Name, Scheme) -> m a -> m a
+    inEnv (x, sc) = local $ \e' -> remove e' x `extend` (x, sc)
+    extend :: Env -> (Name, Scheme) -> Env
+    extend env (x, s) = env { types = M.insert x s (types env) }
+    remove :: Env -> Name -> Env
+    remove (TypeEnv env) x = TypeEnv (M.delete x env)
 
--- data TypeExpr :: * where
---     TEVar :: Int -> TypeExpr
---     TEConcrete :: EType a -> TypeExpr
---     TEO1 :: TOp1 -> TypeExpr -> TypeExpr
---     TEO2 :: TOp2 -> TypeExpr -> TypeExpr -> TypeExpr
+fresh :: MonadState [Name] m => m TExpr
+fresh = state $ \(x:xs) -> (TEV (TV x), xs)
 
--- data TypeError :: * where
---     TErrUnbound :: Int -> TypeError
+applyTExpr :: Subst -> TExpr -> TExpr
+applyTExpr s@(Subst m) t = case t of
+                             TEO0 a -> TEO0 a
+                             TEV v -> M.findWithDefault t v m
+                             TEO1 o e1 -> TEO1 o (applyTExpr s e1)
+                             TEO2 o e1 e2 -> TEO2 o (applyTExpr s e1) (applyTExpr s e2)
 
--- data Scheme :: * where
---     ConcScheme :: TypeExpr -> Scheme
---     Forall :: Scheme -> Scheme
+solver :: MonadError TypeError m => Unifier -> m Subst
+solver (su, cs) = case cs of
+                    [] -> pure su
+                    ((t1, t2): cs0) -> do
+                      su1 <- unifies t1 t2
+                      solver (su1 <> su, map (applyTExpr su1 *** applyTExpr su1) cs0)
 
--- infer :: (MonadReader Env m) => DumbExpr -> m TypeExpr
--- infer e = case e of
+unifies :: MonadError TypeError m => TExpr -> TExpr -> m Subst
+unifies t1 t2 | t1 == t2 = pure mempty
+unifies (TEV v) t = v `bind` t
+unifies t (TEV v) = v `bind` t
+unifies (TEO1 _ t1) (TEO1 _ t2) = unifies t1 t2
+unifies (TEO2 _ t1 t2) (TEO2 _ t3 t4) = unifyMany [t1, t2] [t3, t4]
+unifies t1 t2 = throwError $ TErrUniFail t1 t2
 
---             DO0 o -> case o of
---                        I _ -> return $ TEConcrete EInt
---                        B _ -> return $ TEConcrete EBool
---                        Unit -> return $ TEConcrete EUnit
---                        Nil -> return $ TEO1 TOList (TEVar 0)
+unifyMany :: MonadError TypeError m => [TExpr] -> [TExpr] -> m Subst
+unifyMany [] [] = pure mempty
+unifyMany (t1:ts1) (t2:ts2) = do
+    su1 <- unifies t1 t2
+    su2 <- unifyMany (applyTExpr su1 <$> ts1) (applyTExpr su1 <$> ts2)
+    return (su2 <> su1)
+unifyMany t1 t2 = throwError $ TErrMismatch t1 t2
 
--- lookupEnv :: (MonadReader Env m, MonadError TypeError m)
---           => Int
---           -> m TypeExpr
--- lookupEnv x = do
---     env <- ask
---     case listToMaybe (drop x env) of
---       Nothing -> throwError $ TErrUnbound x
---       Just t  -> undefined
+bind :: MonadError TypeError m => TVar -> TExpr -> m Subst
+bind a t | t == TEV a      = pure mempty
+         | occursCheck a t = throwError $ TErrInfType a t
+         | otherwise       = pure (Subst (M.singleton a t))
+  where
+    occursCheck a' t' = a' `S.member` ftvTExpr t'
 
--- -- data PNat = NZ | NS PNat
-
--- -- data instance Sing (a :: PNat) where
--- --     SNZ :: Sing 'NZ
--- --     SNS :: Sing (a :: PNat) -> Sing ('NS a)
-
--- -- type family CompPN (x :: PNat) (y :: PNat) :: Ordering where
--- --     CompPN 'NZ 'NZ = 'EQ
--- --     CompPN 'NZ ('NS m) = 'LT
--- --     CompPN ('NS n) 'NZ = 'GT
--- --     CompPN ('NS n) ('NS m) = CompPN n m
-
--- -- predPN :: Sing (NS n) -> Sing n
--- -- predPN (SNS ix) = ix
-
--- -- -- type family Pred (x :: PNat) where
--- -- --     Pred NZ = NZ
--- -- --     Pred (NS ix) = ix
-
--- -- data PolyExpr :: * where
--- --     PE :: (Unfoldable (Vec n), CompPN ('NS m) n ~ 'GT)
--- --        => Sing n
--- --        -> Sing m
--- --        -> (ETypeW -> Maybe ETypeW)
--- --        -> (Vec n ETypeW -> ExprW)
--- --        -> PolyExpr
-
--- -- data Vec :: PNat -> * -> * where
--- --     VNil :: Vec 'NZ a
--- --     (:>) :: a -> Vec n a -> Vec ('NS n) a
-
--- -- infixr 5 :>
-
--- -- deriving instance Show e => Show (Vec n e)
--- -- deriving instance Show (Sing (n :: PNat))
-
--- -- class Unfoldable v where
--- --     unfold :: (a -> (b, a)) -> a -> v b
-
--- -- instance Unfoldable (Vec 'NZ) where
--- --     unfold _ _ = VNil
-
--- -- instance Unfoldable (Vec n) => Unfoldable (Vec ('NS n)) where
--- --     unfold f z = let (x, z') = f z
--- --                  in  x :> unfold f z'
-
--- -- replicateU :: Unfoldable v => a -> v a
--- -- replicateU = unfold (\y -> (y, y))
-
--- -- fromListV' :: Unfoldable v => a -> [a] -> v a
--- -- fromListV' d = unfold $ \xs -> case xs of
--- --                                  [] -> (d, [])
--- --                                  y:ys -> (y, ys)
-
--- -- fromListV :: Unfoldable v => [a] -> v a
--- -- fromListV = fromListV' (error "list too short")
-
--- -- tailV :: Vec ('NS n) a -> Vec n a
--- -- tailV (_ :> xs) = xs
-
--- -- indexVec :: (CompPN m n ~ 'GT) => Vec m a -> Sing n -> a
--- -- indexVec (x :> _ ) SNZ      = x
--- -- indexVec (_ :> xs) (SNS ix) = indexVec xs ix
--- -- indexVec _ _                = undefined
-
--- -- replaceAt :: (CompPN (NS m) n ~ 'GT) => Vec m a -> Sing n -> a -> Vec m a
--- -- replaceAt VNil SNZ x = VNil
--- -- replaceAt (x :> xs) SNZ y = x :> xs
--- -- replaceAt (x :> xs) (SNS ix) y = y :> replaceAt xs ix y
-
--- -- insertAt :: (CompPN (NS m) n ~ 'GT) => Vec m a -> Sing n -> a -> Vec (NS m) a
--- -- insertAt xs SNZ y = y :> xs
--- -- insertAt (x :> xs) (SNS ix) y = x :> insertAt xs ix y
-
-
--- -- vToList :: Vec n a -> [a]
--- -- vToList VNil = []
--- -- vToList (x :> xs) = x : vToList xs
-
--- -- zipLV :: (a -> b -> c) -> [a] -> Vec n b -> Vec n c
--- -- zipLV f = zipLV' f (error "list too short")
-
--- -- zipLV' :: (a -> b -> c) -> a -> [a] -> Vec n b -> Vec n c
--- -- zipLV' _ _ _ VNil = VNil
--- -- zipLV' f d [] (y :> ys) = f d y :> zipLV' f d [] ys
--- -- zipLV' f d (x:xs) (y :> ys) = f x y :> zipLV' f d xs ys
-
--- -- -- testUnDumb :: String
--- -- -- testUnDumb = case unDumb (DV 1) of
--- -- --                -- PE p f -> show $ f (ETW EInt :> VNil)
--- -- --                PE _ f -> show $ f (replicateU (ETW EInt))
-
-
-
--- -- -- infer :: ETList vs -> DumbExpr -> (ETList vs, ETypeW)
-
-
--- -- -- unDumb :: DumbExpr -> [PolyExpr]
--- -- -- unDumb e =
--- -- --     case e of
--- -- --       DV v -> case compare v 0 of
--- -- --                 LT -> empty
--- -- --                 EQ -> return . PE (SNS SNZ) (SNS SNZ) Just
--- -- --                              $ \ts -> case indexVec ts SNZ of
--- -- --                                         ETW t -> EW (t :* ENil) t (V IZ)
--- -- --                 GT -> do
--- -- --                   PE p i x f <- unDumb (DV (v - 1))
--- -- --                   let p' = SNS p
--- -- --                       i' = SNS i
--- -- --                       x' = Just
--- -- --                       f' (ETW t :> ts) = case f ts of
--- -- --                                            EW ts' t' e' -> EW (t :* ts') t' (overIxors IS e')
--- -- --                   return $ PE p' i' x' f'
--- -- --       DO0 o -> return $ case o of
--- -- --                           I _ -> PE SNZ SNZ Just $ \_ -> EW ENil EInt (O0 o)
--- -- --                           B _ -> PE SNZ SNZ Just $ \_ -> EW ENil EBool (O0 o)
--- -- --                           Unit -> PE SNZ SNZ Just $ \_ -> EW ENil EUnit (O0 o)
--- -- --                           Nil -> PE (SNS SNZ) (SNS SNZ) (\case ETW (EList t) -> Just (ETW t); _ -> Nothing)
--- -- --                                   $ \ts -> case indexVec ts SNZ of
--- -- --                                              ETW t -> EW ENil (EList t) (O0 Nil)
--- -- --       DO1 o e1 ->
--- -- --         case o of
--- -- --           Abs -> do
--- -- --             PE p i x f <- unDumb e1
--- -- --             case i of
--- -- --               SNZ ->
--- -- --                 case f (replicateU (ETW EUnit)) of
--- -- --                   EW vs EInt e' -> return . PE p i x
--- -- --                                           $ \ts -> case f ts of
--- -- --                                                      EW vs' EInt e' -> EW vs' EInt (O1 Abs e')
--- -- --                                                      EW {} -> error "Impossible!"
--- -- --                   _ -> empty
--- -- --               SNS i' ->
--- -- --                 case x (ETW EInt) of
-
--- --       --         SNS i' ->
--- --       --           case p of
--- --       --             SNS p' ->
--- --       --               case x (ETW EInt) of
--- --       --                 Nothing -> empty
--- --       --                 Just t ->
--- --       --                   case f (replicateU t) of
--- --       --                     EW vs EInt e' -> return . PE p' SNZ Just
--- --       --                                             $ \ts -> case f (insertAt ts i t) of
--- --       --                                                        EW vs' EInt e' -> EW vs' EInt (O1 Abs e')
-
--- --                         -- case f (replaceAt (replicateU (ETW EUnit)) i (ETW (x (ETW EInt)))) of
--- --                         --            _ -> empty
--- --                       --   SNS i' -> undefined
--- --                       -- let p' = 
--- --                       -- case f (replicateU (ETW EUnit)) of
--- --                       --   EW vs EInt e' -> return . PE p $ \ts -> case f ts of
--- --                       --                                             EW vs' EInt e' -> EW vs' EInt (O1 Abs e')
--- --                                                                   -- maybe
--- --                                                                   -- PolyExpr
--- --                                                                   -- can
--- --                                                                   -- fail
--- --                                                                   -- too?
-
--- -- -- makeMatch :: (ETypeW -> ETypeW) -> ETypeW -> ETypeW
--- -- -- makeMatch f t = undefined
--- -- --   where
--- -- --     ETW y = f t
+ftvTExpr :: TExpr -> Set TVar
+ftvTExpr t' = case t' of
+                TEV a' -> S.singleton a'
+                TEO0 _ -> S.empty
+                TEO1 _ t1 -> ftvTExpr t1
+                TEO2 _ t1 t2 -> ftvTExpr t1 `S.union` ftvTExpr t2
