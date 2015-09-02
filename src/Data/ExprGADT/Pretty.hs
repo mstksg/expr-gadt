@@ -121,16 +121,6 @@ exprShower' l e = case e of
                                        . showString v
                                        . showString " -> "
                                        . eλS 0
-
-
-    -- If       :: Op3 Bool a a a
-    -- Case     :: Op3 (Either a b) (a -> c) (b -> c) c
-    -- UnfoldrN :: Op3 Int (a -> (b, a)) a [b]
-    -- Foldr    :: Op3 (a -> b -> b) b [a] b
-
-        -- O1 op e1 -> do
-        --     e1' <- showExpr e1 vs
-        --     return $ showAp (const $ showString (op1 op)) e1'
   where
     infixl 1 $*
     f $* x = showOp oprAp f x
