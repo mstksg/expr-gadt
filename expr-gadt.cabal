@@ -18,13 +18,15 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.ExprGADT.Expr
-                       Data.ExprGADT.Types
+                       Data.ExprGADT.Dumb
+                       Data.ExprGADT.Dumb.Infer
+                       Data.ExprGADT.Dumb.Types
                        Data.ExprGADT.Eval
                        Data.ExprGADT.Generate
-                       Data.ExprGADT.Traversals
-                       Data.ExprGADT.Pretty
                        Data.ExprGADT.Parse
-                       Data.ExprGADT.Dumb
+                       Data.ExprGADT.Pretty
+                       Data.ExprGADT.Traversals
+                       Data.ExprGADT.Types
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
