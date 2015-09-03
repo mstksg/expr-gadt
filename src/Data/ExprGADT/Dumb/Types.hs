@@ -29,7 +29,7 @@ data DumbExpr :: * where
 
 data TExpr :: * where
     TEV      :: TVar    -> TExpr
-    TEO0     :: Show (EType a) => EType a -> TExpr
+    TEO0     :: EType a -> TExpr
     TEO1     :: TOp1    -> TExpr -> TExpr
     TEO2     :: TOp2    -> TExpr -> TExpr -> TExpr
 
