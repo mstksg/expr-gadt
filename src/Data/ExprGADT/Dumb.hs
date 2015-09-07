@@ -141,6 +141,9 @@ collapseTExpr (TEO2 o t1 t2) = case (collapseTExpr t1, collapseTExpr t2) of
 data UDEnv n where
     UDE :: Map VName (NatIxor n) -> Vec n ETypeW -> UDEnv n
 
+emptyUDE :: UDEnv NZ
+emptyUDE = UDE M.empty VNil
+
 data NatIxor :: PNat -> * where
     NIZ :: NatIxor (NS n)
     NIS :: NatIxor n -> NatIxor (NS n)
@@ -156,10 +159,13 @@ nameToEW (UDE mp tv) v = tVecToEW tv <$> M.lookup v mp
     tVecToEW VNil _ = error "impossible. type system should prevent.  what even"
 
 data PolyExpr :: * where
-    PE :: Sing n -> (forall t. EType t -> Maybe (VecHole n ETypeW)) -> (Vec n ETypeW -> ExprW) -> PolyExpr
+    PE :: Sing n -> (PolyType -> Maybe (VecHole n ETypeW)) -> (Vec n ETypeW -> ExprW) -> PolyExpr
 
 data VecHole :: PNat -> * -> * where
     VH :: Sing n -> (Vec n a -> Vec m a) -> VecHole m a
+
+-- data PolyType :: * where
+--     PT :: Sing n -> (Vec n ETypeW -> ETypeW) -> PolyType
 
 unDumbWith :: UDEnv n -> DumbExpr -> Maybe PolyExpr
 unDumbWith ude e =
@@ -169,9 +175,14 @@ unDumbWith ude e =
                  I _ -> return . PE SNZ (const Nothing) $ \_ -> EW ENil EInt (O0 o)
                  B _ -> return . PE SNZ (const Nothing) $ \_ -> EW ENil EBool (O0 o)
                  Unit -> return . PE SNZ (const Nothing) $ \_ -> EW ENil EUnit (O0 o)
-                 Nil -> return $ PE (SNS SNZ) (\case EList t -> Just $ VH SNZ (\_ -> ETW t :> VNil)
-                                                     _       -> Nothing )
+                 Nil -> return $ PE (SNS SNZ) (\ts -> do
+                                                  PT SNZ ft <- Just ts
+                                                  ETW (EList t) <- Just $ ft VNil
+                                                  return $ VH SNZ (\_ -> ETW t :> VNil)
+                                              )
                                               (\(ETW t :> VNil) -> EW ENil (EList t) (O0 Nil))
+                 -- Nil -> return $ PE (SNS SNZ) (\case EList t -> Just $ VH SNZ (\_ -> ETW t :> VNil)
+                 --                                     _       -> Nothing )
       DO1 o e1 -> case o of
                     Abs    -> mkO1 EInt EInt e1   $ \case EW e1vs EInt e1e  -> Just $ EW e1vs EInt (O1 o e1e)
                                                           _                 -> Nothing
@@ -181,36 +192,51 @@ unDumbWith ude e =
                                                           _                 -> Nothing
                     Left'  -> do
                       PE ts vh f <- unDumbWith ude e1
-                      return $ PE (SNS ts) (\case EEither t1 t2 -> do
-                                                    VH hs g <- vh t1
-                                                    return . VH hs $ \xs -> ETW t2 :> g xs
-                                                  _             -> Nothing
+                      return $ PE (SNS ts) (\ts -> do
+                                               PT SNZ ft <- Just ts     -- can this be polied?
+                                               ETW (EEither t1 t2) <- Just $ ft VNil
+                                               VH hs g <- vh (PT SNZ $ \_ -> ETW t1)
+                                               return $ VH hs (\xs -> ETW t2 :> g xs)
                                            )
                                            (\(ETW t :> etws) -> case f etws of
                                                                   EW e1vs e1t e1e -> EW e1vs (EEither e1t t) (O1 Left' e1e)
                                            )
-                    Right' -> do
+                    Right'  -> do
                       PE ts vh f <- unDumbWith ude e1
-                      return $ PE (SNS ts) (\case EEither t1 t2 -> do
-                                                    VH hs g <- vh t2
-                                                    return . VH hs $ \xs -> ETW t1 :> g xs
-                                                  _             -> Nothing
+                      return $ PE (SNS ts) (\ts -> do
+                                               PT SNZ ft <- Just ts
+                                               ETW (EEither t1 t2) <- Just $ ft VNil
+                                               VH hs g <- vh (PT SNZ $ \_ -> ETW t2)
+                                               return $ VH hs (\xs -> ETW t1 :> g xs)
                                            )
                                            (\(ETW t :> etws) -> case f etws of
                                                                   EW e1vs e1t e1e -> EW e1vs (EEither t e1t) (O1 Right' e1e)
                                            )
                     Fst -> do
                       PE ts vh f <- unDumbWith ude e1
-                      return $ PE ts (\t1 -> do
-                                       VH hs g <- vh $ ETup t1 undefined    -- crap
-                                       undefined
+                      return $ PE ts (\(PT vts ft) -> vh $ PT (SNS vts) (\(ETW u :> us) -> case ft us of
+                                                                                             ETW t1 -> ETW (ETup t1 u)
+                                                                        )
                                      )
-                                     undefined
+                                     (\etws -> case f etws of
+                                                 EW e1vs (ETup e1t _) e1e -> EW e1vs e1t (O1 Fst e1e)
+                                                 _                        -> error "yo"
+                                     )
+                    Snd -> do
+                      PE ts vh f <- unDumbWith ude e1
+                      return $ PE ts (\(PT vts ft) -> vh $ PT (SNS vts) (\(ETW u :> us) -> case ft us of
+                                                                                             ETW t1 -> ETW (ETup u t1)
+                                                                        )
+                                     )
+                                     (\etws -> case f etws of
+                                                 EW e1vs (ETup _ e1t) e1e -> EW e1vs e1t (O1 Snd e1e)
+                                                 _                        -> error "yo"
+                                     )
   where
     mkO1 :: EType a -> EType b -> DumbExpr -> (ExprW -> Maybe ExprW) -> Maybe PolyExpr
     mkO1 t1 t2 e1 apply = do
       PE ts vh f <- unDumbWith ude e1
-      VH ts' g <- vh t1
+      VH ts' g <- vh $ PT SNZ (\_ -> ETW t1)
       return $ PE ts' (const Nothing) (\xs ->
                  let e = f (g xs)
                      err = case e of
