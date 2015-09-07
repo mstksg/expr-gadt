@@ -20,10 +20,14 @@ import Data.ExprGADT.Dumb.Types
 import Data.ExprGADT.Types
 import Data.ExprGADT.Traversals
 import Data.Map.Strict           (Map)
+import Data.Singletons.Decide
 import Data.Proxy
 import Control.Monad.Except
 import Data.Singletons
+import Data.Proof.EQ as Ty
+import Data.IsTy
 import Unsafe.Coerce
+import Control.Applicative
 import Data.Maybe
 import qualified Data.Map.Strict as M
 
@@ -65,6 +69,10 @@ addSN :: forall n m nm. (NPlus n m ~ nm)
       => Sing n -> Sing m -> Sing nm
 addSN SNZ y = y
 addSN (SNS x) y = SNS (addSN x y)
+
+concatVec :: forall n m a. Vec n a -> Vec m a -> Vec (NPlus n m) a
+concatVec VNil      y = y
+concatVec (x :> xs) y = x :> concatVec xs y
 
 type family NSub (n :: PNat) (m :: PNat) :: PNat where
     NSub n      'NZ      = 'NZ
@@ -179,12 +187,9 @@ unDumbWith ude e =
                                                )
                                                (\(ETW t :> VNil) -> EWI (EList t) (O0 Nil))
       DO1 o e1 -> case o of
-                    Abs    -> mkO1 EInt  e1 $ \case EWI EInt  e1e -> Just $ EWI EInt (O1 o e1e)
-                                                    _             -> Nothing
-                    Signum -> mkO1 EInt  e1 $ \case EWI EInt  e1e -> Just $ EWI EInt (O1 o e1e)
-                                                    _             -> Nothing
-                    Not    -> mkO1 EBool e1 $ \case EWI EBool e1e -> Just $ EWI EBool (O1 o e1e)
-                                                    _             -> Nothing
+                    Abs    -> mkO1 o EInt EInt e1
+                    Signum -> mkO1 o EInt EInt e1
+                    Not    -> mkO1 o EBool EBool e1
                     Left'  -> do
                       PE ts vh f <- unDumbWith ude e1
                       return $ PE (SNS ts) (\ts -> do
@@ -232,22 +237,102 @@ unDumbWith ude e =
                                                  _                    -> error "unDumbWith lie"
                                      )
 
+      DO2 o e1 e2 -> case o of
+                       Plus    -> mkO2 o EInt EInt EInt e1 e2
+                       Minus   -> mkO2 o EInt EInt EInt e1 e2
+                       Times   -> mkO2 o EInt EInt EInt e1 e2
+                       LEquals -> mkO2 o EInt EInt EBool e1 e2
+                       And     -> mkO2 o EBool EBool EBool e1 e2
+                       Or      -> mkO2 o EBool EBool EBool e1 e2
+                       Div     -> mkO2 o EInt EInt (EEither EUnit EInt) e1 e2
+                       Mod     -> mkO2 o EInt EInt (EEither EUnit EInt) e1 e2
+                       Tup     -> do
+                         PE ts1 vh1 f1 <- unDumbWith ude e1
+                         PE ts2 vh2 f2 <- unDumbWith ude e2
+                         return $ PE (addSN ts1 ts2) (\ts -> do
+                                                       PT SNZ ft <- Just ts
+                                                       ETW (ETup t1 t2) <- Just $ ft VNil
+                                                       VH hs1 g1 <- vh1 $ PT SNZ (\VNil -> ETW t1)
+                                                       VH hs2 g2 <- vh2 $ PT SNZ (\VNil -> ETW t2)
+                                                       return $ VH (addSN hs1 hs2)
+                                                                   (\etws -> let Just etw1 = g1 <$> takeVec hs1 etws
+                                                                                 etw2 = applyOnLast g2 hs1 etws
+                                                                             in  concatVec etw1 etw2
+                                                                   )
+                                                     )
+                                                     (\etws -> let Just ew1 = f1 <$> takeVec ts1 etws
+                                                                   ew2      = applyOnLast f2 ts1 etws
+                                                               in  case (ew1, ew2) of
+                                                                     (EWI t1 e1e, EWI t2 e2e) ->
+                                                                       EWI (ETup t1 t2) (O2 Tup e1e e2e)
+                                                     )
+                       -- Cons    -> do
+                       --   PE ts1 vh1 f1 <- unDumbWith ude e1
+                       --   PE ts2 vh2 f2 <- unDumbWith ude e2
+                       --   return $ PE (addSN ts1 ts2) (\ts -> do
+                       --                                  PT SNZ ft <- Just ts
+                       --                                  ETW (EList t) <- Just $ ft VNil
+                       --                                  VH hs1 g1 <- vh1 $ PT SNZ (\VNil -> ETW t)
+                       --                                  VH hs2 g2 <- vh1 $ PT SNZ (\VNil -> ETW (EList t))
+                       --                                  return $ VH (addSN hs1 hs2)
+                       --                                              (\etws -> let Just etw1 = g1 <$> takeVec hs1 etws
+                       --                                                            etw2 = applyOnLast g2 hs1 etws
+                       --                                                        in  concatVec etw1 etw2
+                       --                                              )
+                       --                               )
+                       --                               (\etws -> let Just ew1 = f1 <$> takeVec ts1 etws
+                       --                                             ew2      = applyOnLast f2 ts1 etws
+                       --                                         in  case (ew1, ew2) of
+                       --                                               (EWI t1 e1e, EWI (EList t2) e2e) ->
+                       --                                                 EWI (EList t1) (O2 Cons e1e e2e)
+                       --                               )
   where
-    mkO1 :: EType a -> DumbExpr -> (ExprWIx vs -> Maybe (ExprWIx vs)) -> Either DumbError (PolyExpr vs)
-    mkO1 t1 e1 apply = do
+    mkO1 :: Op1 a b
+         -> EType a
+         -> EType b
+         -> DumbExpr
+         -> Either DumbError (PolyExpr vs)
+    mkO1 o t1 t2 e1 = do
       PE ts vh f <- unDumbWith ude e1
       VH ts' g <- maybe (throwError (DErrNoUnify (ETW t1))) return
                 $ vh (PT SNZ (\VNil -> ETW t1))
       return $ PE ts' (const Nothing) (\xs ->
-                 let ew = f (g xs)
-                     err = case ew of
-                             EWI t0 _ -> error . unwords $ [ "Lied to by unDumbWith.  Expected "
-                                                           , show t1
-                                                           , " but got "
-                                                           , show t0
-                                                           ]
-                 in  fromMaybe err (apply ew)
+                 case f (g xs) of
+                   EWI t1' e1e | Just Ty.Refl <- tyEq t1 t1' -> EWI t2 (O1 o e1e)
+                               | otherwise -> error . unwords $ [ "Lied to by unDumbWith.  Expected "
+                                                                , show t1
+                                                                , " but got "
+                                                                , show t1'
+                                                                ]
                )
+    mkO2 :: Op2 a b c
+         -> EType a
+         -> EType b
+         -> EType c
+         -> DumbExpr
+         -> DumbExpr
+         -> Either DumbError (PolyExpr vs)
+    mkO2 o t1 t2 t3 e1 e2 = do
+      PE ts1 vh1 f1 <- unDumbWith ude e1
+      PE ts2 vh2 f2 <- unDumbWith ude e2
+      VH ts1' g1 <- maybe (throwError (DErrNoUnify (ETW t1))) return
+                  $ vh1 (PT SNZ (\VNil -> ETW t1))
+      VH ts2' g2 <- maybe (throwError (DErrNoUnify (ETW t2))) return
+                  $ vh2 (PT SNZ (\VNil -> ETW t2))
+      return $ PE (addSN ts1' ts2') (const Nothing) (\xs ->
+                    let Just ew1 = f1 . g1 <$> takeVec ts1' xs
+                        ew2      = applyOnLast (f2 . g2) ts1' xs
+                    in  case (ew1, ew2) of
+                          (EWI t1' e1e, EWI t2' e2e) | Just Ty.Refl <- tyEq t1 t1'
+                                                     , Just Ty.Refl <- tyEq t2 t2'
+                                                     -> EWI t3 (O2 o e1e e2e)
+                                                     | otherwise
+                                                     -> error . unwords $ [ "Lied to by unDumbWith.  Expected "
+                                                                          , show t1 ++ " and " ++ show t2
+                                                                          , " but got "
+                                                                          , show t1' ++ " and " ++ show t2'
+                                                                          ]
+                  )
 
 --       DO2 o e1 e2 -> case o of
 --                        Plus -> mkO2 EInt EInt e1 e2 $ \ew1 ew2 ->
@@ -256,20 +341,6 @@ unDumbWith ude e =
 --                                      Just $ EW undefined EInt undefined
 --                                    _ -> Nothing
 --   where
---     mkO1 :: EType a -> DumbExpr -> (ExprW -> Maybe ExprW) -> Maybe PolyExpr
---     mkO1 t1 e1 apply = do
---       PE ts vh f <- unDumbWith ude e1
---       VH ts' g <- vh $ PT SNZ (\VNil -> ETW t1)
---       return $ PE ts' (const Nothing) (\xs ->
---                  let ew = f (g xs)
---                      err = case ew of
---                              EW _ t0 _ -> error . unwords $ [ "Lied to by unDumbWith.  Expected "
---                                                             , show t1
---                                                             , " but got "
---                                                             , show t0
---                                                             ]
---                  in  fromMaybe err (apply ew)
---                )
 --     mkO2 :: EType a -> EType b -> DumbExpr -> DumbExpr -> (ExprW -> ExprW -> Maybe ExprW) -> Maybe PolyExpr
 --     mkO2 t1 t2 e1 e2 apply = do
 --       PE ts1 vh1 f1 <- unDumbWith ude e1

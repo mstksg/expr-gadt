@@ -13,7 +13,10 @@
 module Data.ExprGADT.Types where
 
 import Data.Proxy
+import Control.Applicative
 import Data.Monoid
+import Data.IsTy
+import Data.Proof.EQ
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
@@ -297,6 +300,25 @@ compareEType (EList a)     (EList b)     = compareEType a b
 
 instance Ord (EType a) where
     compare = compareEType
+
+instance IsTy EType where
+    tyEq EUnit EUnit = Just Refl
+    tyEq EBool EBool = Just Refl
+    tyEq EInt EInt = Just Refl
+    tyEq (EList t1) (EList t2) = case tyEq t1 t2 of
+                                   Just Refl -> Just Refl
+                                   _ -> Nothing
+    tyEq (ETup t1 t1') (ETup t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+                                         Just (Refl, Refl) -> Just Refl
+                                         _ -> Nothing
+    tyEq (EEither t1 t1') (EEither t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+                                               Just (Refl, Refl) -> Just Refl
+                                               _ -> Nothing
+    tyEq (EFunc t1 t1') (EFunc t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+                                           Just (Refl, Refl) -> Just Refl
+                                           _ -> Nothing
+    tyEq _ _ = Nothing
+
 
 -- eTypeSize :: EType a -> Int -> Int
 -- eTypeSize t = case t of
