@@ -15,7 +15,6 @@
 
 module Data.ExprGADT.Dumb where
 
--- import Data.ExprGADT.Dumb.Infer
 import Data.ExprGADT.Dumb.Types
 import Data.ExprGADT.Types
 import Data.ExprGADT.Traversals
@@ -192,9 +191,9 @@ unDumbWith ude e =
                     Not    -> mkO1 o EBool EBool e1
                     Left'  -> do
                       PE ts vh f <- unDumbWith ude e1
-                      return $ PE (SNS ts) (\ts -> do
-                                               PT SNZ ft <- Just ts
-                                               ETW (EEither t1 t2) <- Just $ ft VNil
+                      return $ PE (SNS ts) (\pt -> do
+                                               PT SNZ ft <- Just pt
+                                               ETW (EEither t1 t2) <- Just $ ft VNil        -- most likely wrong!!!!! can be poly/scheme
                                                VH hs g <- vh $ PT SNZ (\VNil -> ETW t1)     -- get the inner to be the expected input
                                                return $ VH hs (\xs -> ETW t2 :> g xs)
                                   )
@@ -203,8 +202,8 @@ unDumbWith ude e =
                                   )
                     Right' -> do
                       PE ts vh f <- unDumbWith ude e1
-                      return $ PE (SNS ts) (\ts -> do
-                                               PT SNZ ft <- Just ts
+                      return $ PE (SNS ts) (\pt -> do
+                                               PT SNZ ft <- Just pt
                                                ETW (EEither t1 t2) <- Just $ ft VNil
                                                VH hs g <- vh $ PT SNZ (\VNil -> ETW t2)
                                                return $ VH hs (\xs -> ETW t1 :> g xs)
@@ -266,26 +265,51 @@ unDumbWith ude e =
                                                                      (EWI t1 e1e, EWI t2 e2e) ->
                                                                        EWI (ETup t1 t2) (O2 Tup e1e e2e)
                                                      )
-                       -- Cons    -> do
-                       --   PE ts1 vh1 f1 <- unDumbWith ude e1
-                       --   PE ts2 vh2 f2 <- unDumbWith ude e2
-                       --   return $ PE (addSN ts1 ts2) (\ts -> do
-                       --                                  PT SNZ ft <- Just ts
-                       --                                  ETW (EList t) <- Just $ ft VNil
-                       --                                  VH hs1 g1 <- vh1 $ PT SNZ (\VNil -> ETW t)
-                       --                                  VH hs2 g2 <- vh1 $ PT SNZ (\VNil -> ETW (EList t))
-                       --                                  return $ VH (addSN hs1 hs2)
-                       --                                              (\etws -> let Just etw1 = g1 <$> takeVec hs1 etws
-                       --                                                            etw2 = applyOnLast g2 hs1 etws
-                       --                                                        in  concatVec etw1 etw2
-                       --                                              )
-                       --                               )
-                       --                               (\etws -> let Just ew1 = f1 <$> takeVec ts1 etws
-                       --                                             ew2      = applyOnLast f2 ts1 etws
-                       --                                         in  case (ew1, ew2) of
-                       --                                               (EWI t1 e1e, EWI (EList t2) e2e) ->
-                       --                                                 EWI (EList t1) (O2 Cons e1e e2e)
-                       --                               )
+                       Cons    -> do
+                         PE ts1 vh1 f1 <- unDumbWith ude e1
+                         PE ts2 vh2 f2 <- unDumbWith ude e2
+                         return $ PE (addSN ts1 ts2) (\ts -> do
+                                                        PT SNZ ft <- Just ts
+                                                        ETW (EList t) <- Just $ ft VNil
+                                                        VH hs1 g1 <- vh1 $ PT SNZ (\VNil -> ETW t)
+                                                        VH hs2 g2 <- vh2 $ PT SNZ (\VNil -> ETW (EList t))
+                                                        return $ VH (addSN hs1 hs2)
+                                                                    (\etws -> let Just etw1 = g1 <$> takeVec hs1 etws
+                                                                                  etw2 = applyOnLast g2 hs1 etws
+                                                                              in  concatVec etw1 etw2
+                                                                    )
+                                                     )
+                                                     (\etws -> let Just ew1 = f1 <$> takeVec ts1 etws
+                                                                   ew2      = applyOnLast f2 ts1 etws
+                                                               in  case (ew1, ew2) of
+                                                                     (EWI t1 e1e, EWI (EList t1') e2e)
+                                                                       | Just Ty.Refl <- tyEq t1 t1'
+                                                                       -> EWI (EList t1) (O2 Cons e1e e2e)
+                                                                     _ -> error "hey, does this work?"
+                                                     )
+                       Ap      -> do
+                         PE ts1 vh1 f1 <- unDumbWith ude e1
+                         PE ts2 vh2 f2 <- unDumbWith ude e2
+                         return $ PE (addSN ts1 ts2) (\ts -> do
+                                                       PT SNZ ft <- Just ts
+                                                       ETW (EFunc t1 t2) <- Just $ ft VNil
+                                                       VH hs1 g1 <- vh1 $ PT SNZ (\VNil -> ETW t1)
+                                                       VH hs2 g2 <- vh2 $ PT SNZ (\VNil -> ETW t2)
+                                                       return $ VH (addSN hs1 hs2)
+                                                                   (\etws -> let Just etw1 = g1 <$> takeVec hs1 etws
+                                                                                 etw2 = applyOnLast g2 hs1 etws
+                                                                             in  concatVec etw1 etw2
+                                                                   )
+                                                     )
+                                                     (\etws -> let Just ew1 = f1 <$> takeVec ts1 etws
+                                                                   ew2      = applyOnLast f2 ts1 etws
+                                                               in  case (ew1, ew2) of
+                                                                     (EWI (EFunc t1 t2) e1e, EWI t1' e2e)
+                                                                       | Just Ty.Refl <- tyEq t1 t1'
+                                                                       -> EWI t2 (O2 Ap e1e e2e)
+                                                                     _ -> error "hey what is going on, is this possible?"
+                                                     )
+
   where
     mkO1 :: Op1 a b
          -> EType a
@@ -293,7 +317,7 @@ unDumbWith ude e =
          -> DumbExpr
          -> Either DumbError (PolyExpr vs)
     mkO1 o t1 t2 e1 = do
-      PE ts vh f <- unDumbWith ude e1
+      PE _ vh f <- unDumbWith ude e1
       VH ts' g <- maybe (throwError (DErrNoUnify (ETW t1))) return
                 $ vh (PT SNZ (\VNil -> ETW t1))
       return $ PE ts' (const Nothing) (\xs ->
@@ -313,8 +337,8 @@ unDumbWith ude e =
          -> DumbExpr
          -> Either DumbError (PolyExpr vs)
     mkO2 o t1 t2 t3 e1 e2 = do
-      PE ts1 vh1 f1 <- unDumbWith ude e1
-      PE ts2 vh2 f2 <- unDumbWith ude e2
+      PE _ vh1 f1 <- unDumbWith ude e1
+      PE _ vh2 f2 <- unDumbWith ude e2
       VH ts1' g1 <- maybe (throwError (DErrNoUnify (ETW t1))) return
                   $ vh1 (PT SNZ (\VNil -> ETW t1))
       VH ts2' g2 <- maybe (throwError (DErrNoUnify (ETW t2))) return
@@ -333,40 +357,3 @@ unDumbWith ude e =
                                                                           , show t1' ++ " and " ++ show t2'
                                                                           ]
                   )
-
---       DO2 o e1 e2 -> case o of
---                        Plus -> mkO2 EInt EInt e1 e2 $ \ew1 ew2 ->
---                                  case (ew1, ew2) of
---                                    (EW e1vs EInt e1e, EW e2vs EInt e2e) ->
---                                      Just $ EW undefined EInt undefined
---                                    _ -> Nothing
---   where
---     mkO2 :: EType a -> EType b -> DumbExpr -> DumbExpr -> (ExprW -> ExprW -> Maybe ExprW) -> Maybe PolyExpr
---     mkO2 t1 t2 e1 e2 apply = do
---       PE ts1 vh1 f1 <- unDumbWith ude e1
---       PE ts2 vh2 f2 <- unDumbWith ude e2
---       VH ts1' g1 <- vh1 $ PT SNZ (\VNil -> ETW t1)
---       VH ts2' g2 <- vh2 $ PT SNZ (\VNil -> ETW t2)
---       return $ PE (addSN ts1' ts2') (const Nothing) (\xs ->
---                     let Just ew1 = f1 . g1 <$> takeVec ts1' xs
---                         ew2      = applyOnLast (f2 . g2) ts1' xs
---                         err      = case (ew1, ew2) of
---                                        (EW _ t1' _, EW _ t2' _) ->
---                                          error . unwords $ [ "Lied to by unDumbWith.  Expected "
---                                                            , show t1 ++ " and " ++ show t2
---                                                            , " but got "
---                                                            , show t1' ++ " and " ++ show t2'
---                                                            ]
---                     in  fromJust (apply ew1 ew2)
---                   )
---       -- undefined
--- -- collapseTExpr (TEO2 o t1 t2) = case (collapseTExpr t1, collapseTExpr t2) of
--- --                                  (PT (n :: Sing n) f, PT (m :: Sing m) g) ->
--- --                                    PT (addSN n m) $ \(ts :: Vec (NPlus n m) ETypeW) ->
--- --                                      let Just etw1 = f <$> takeVec n ts
--- --                                          etw2 = applyOnLast g n ts
--- --                                      in  case (etw1, etw2) of
--- --                                            (ETW t1', ETW t2') -> case o of
--- --                                                                    TOEither -> ETW (EEither t1' t2')
--- --                                                                    TOTuple -> ETW (ETup t1' t2')
--- --                                                                    TOFunc -> ETW (EFunc t1' t2')
