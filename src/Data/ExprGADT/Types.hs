@@ -93,6 +93,9 @@ data ExprW :: * where
 -- data ExprIxW :: * -> * where
 --     EIW :: ETList vs -> Expr vs a -> ExprIxW a
 
+data ExprWIx :: [*] -> * where
+    EWI :: EType a -> Expr vs a -> ExprWIx vs
+
 data ETypeW :: * where
     ETW :: EType a -> ETypeW
 
