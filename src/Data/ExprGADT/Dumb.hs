@@ -123,21 +123,6 @@ collapseTExpr (TEO2 o t1 t2) = case (collapseTExpr t1, collapseTExpr t2) of
                                                                    TOTuple -> ETW (ETup t1' t2')
                                                                    TOFunc -> ETW (EFunc t1' t2')
 
--- unDumb :: DumbExpr -> Either TypeError PolyExpr
--- unDumb e = case e of
---              -- DV v  | v <= 0    -> Right . PE (SNS SNZ) $ \(ETW x :> VNil) -> EW (x :* ENil) x (V IZ)
---                    -- | otherwise -> do
---                    --     PE n f <- unDumb $ DV (v - 1)
---                    --     let f' = undefined
---                    --     return $ PE (SNS n) f'
---              DO0 o -> case o of
---                         I _  -> Right . PE SNZ $ \_ -> EW ENil EInt (O0 o)
---                         B _  -> Right . PE SNZ $ \_ -> EW ENil EBool (O0 o)
---                         Unit -> Right . PE SNZ $ \_ -> EW ENil EUnit (O0 o)
---                         Nil  -> Right . PE (SNS SNZ) $ \(ETW x :> VNil) -> EW (x :* ENil) (EList x) (O0 Nil)
---              DO1 o e1 -> case o of
---                            Abs -> undefined
-
 data UDEnv n where
     UDE :: Map VName (NatIxor n) -> Vec n ETypeW -> UDEnv n
 
@@ -184,12 +169,12 @@ unDumbWith ude e =
                  -- Nil -> return $ PE (SNS SNZ) (\case EList t -> Just $ VH SNZ (\_ -> ETW t :> VNil)
                  --                                     _       -> Nothing )
       DO1 o e1 -> case o of
-                    Abs    -> mkO1 EInt EInt e1   $ \case EW e1vs EInt e1e  -> Just $ EW e1vs EInt (O1 o e1e)
-                                                          _                 -> Nothing
-                    Signum -> mkO1 EInt EInt e1   $ \case EW e1vs EInt e1e  -> Just $ EW e1vs EInt (O1 o e1e)
-                                                          _                 -> Nothing
-                    Not    -> mkO1 EBool EBool e1 $ \case EW e1vs EBool e1e -> Just $ EW e1vs EBool (O1 o e1e)
-                                                          _                 -> Nothing
+                    Abs    -> mkO1 EInt e1   $ \case EW e1vs EInt e1e  -> Just $ EW e1vs EInt (O1 o e1e)
+                                                     _                 -> Nothing
+                    Signum -> mkO1 EInt e1   $ \case EW e1vs EInt e1e  -> Just $ EW e1vs EInt (O1 o e1e)
+                                                     _                 -> Nothing
+                    Not    -> mkO1 EBool e1 $ \case EW e1vs EBool e1e -> Just $ EW e1vs EBool (O1 o e1e)
+                                                    _                 -> Nothing
                     Left'  -> do
                       PE ts vh f <- unDumbWith ude e1
                       return $ PE (SNS ts) (\ts -> do
@@ -232,59 +217,53 @@ unDumbWith ude e =
                                                  EW e1vs (ETup _ e1t) e1e -> EW e1vs e1t (O1 Snd e1e)
                                                  _                        -> error "yo"
                                      )
+      DO2 o e1 e2 -> case o of
+                       Plus -> mkO2 EInt EInt e1 e2 $ \ew1 ew2 ->
+                                 case (ew1, ew2) of
+                                   (EW e1vs EInt e1e, EW e2vs EInt e2e) ->
+                                     Just $ EW undefined EInt _
+                                   _ -> Nothing
   where
-    mkO1 :: EType a -> EType b -> DumbExpr -> (ExprW -> Maybe ExprW) -> Maybe PolyExpr
-    mkO1 t1 t2 e1 apply = do
+    mkO1 :: EType a -> DumbExpr -> (ExprW -> Maybe ExprW) -> Maybe PolyExpr
+    mkO1 t1 e1 apply = do
       PE ts vh f <- unDumbWith ude e1
-      VH ts' g <- vh $ PT SNZ (\_ -> ETW t1)
+      VH ts' g <- vh $ PT SNZ (\VNil -> ETW t1)
       return $ PE ts' (const Nothing) (\xs ->
-                 let e = f (g xs)
-                     err = case e of
+                 let ew = f (g xs)
+                     err = case ew of
                              EW _ t0 _ -> error . unwords $ [ "Lied to by unDumbWith.  Expected "
                                                             , show t1
                                                             , " but got "
                                                             , show t0
                                                             ]
-                 in  fromMaybe err (apply e)
+                 in  fromMaybe err (apply ew)
                )
-
-    -- intO1 :: Op1 Int Int -> DumbExpr -> Maybe PolyExpr
-    -- intO1 o e1 = do
-    --   PE ts vh f <- unDumbWith ude e1
-    --   VH ts' g <- vh EInt
-    --   return $ PE ts' (const Nothing) (\xs -> case f (g xs) of
-    --                                             EW e1vs EInt e1e -> EW e1vs EInt (O1 o e1e)
-    --                                             EW _ t _ -> error $ "Was promised an EInt by unDumbWith but got " ++ show t
-    --                                   )
-    --   -- case f feed of
-    --   --   EW _ EInt _ -> return . PE ts c
-    --   --                         $ \xs -> case f xs of
-    --   --                                    EW e1vs EInt e1e -> EW e1vs EInt (O1 Abs e1e)
-    --   --                                    -- EW _ _ _ ->
-
-
--- etListToExpr :: ETList (v ': vs) -> PolyExpr
--- etListToExpr (t :* ts)   = PE SNZ $ \_ -> EW (t :* ts) t (V IZ)
-
--- testSomeSing :: SomeSing ('KProxy :: KProxy PNat) -> String
--- testSomeSing n = case n of
---                    SomeSing SNZ -> "hey"
---                    SomeSing (SNS x) -> "yo " ++ testSomeSing (SomeSing x)
-
-        -- (ss, PT n f) <- maybe undefined Right $ M.lookup v env
-        -- undefined
-        -- case n of
-        --   SNZ -> case f VNil of
-        --            ETW t -> makeVar ss t
-          -- case ss of
-          --                     NZ -> Right . PE SNZ $ \_ -> EW (t :* ENil) t (V IZ)
-          --                     NS i -> do
-          --                       PE n g <- unDumbWith ude
-
-
-                        -- PT n f <- maybe undefined Right $ M.lookup v (udNames env)
-                        -- undefined
-                        -- case n of
-                        --   SNZ -> case f VNil of
-                        --            -- ETW t ->
-                        -- -- undefined
+    mkO2 :: EType a -> EType b -> DumbExpr -> DumbExpr -> (ExprW -> ExprW -> Maybe ExprW) -> Maybe PolyExpr
+    mkO2 t1 t2 e1 e2 apply = do
+      PE ts1 vh1 f1 <- unDumbWith ude e1
+      PE ts2 vh2 f2 <- unDumbWith ude e2
+      VH ts1' g1 <- vh1 $ PT SNZ (\VNil -> ETW t1)
+      VH ts2' g2 <- vh2 $ PT SNZ (\VNil -> ETW t2)
+      return $ PE (addSN ts1' ts2') (const Nothing) (\xs ->
+                    let Just ew1 = f1 . g1 <$> takeVec ts1' xs
+                        ew2      = applyOnLast (f2 . g2) ts1' xs
+                        err      = case (ew1, ew2) of
+                                       (EW _ t1' _, EW _ t2' _) ->
+                                         error . unwords $ [ "Lied to by unDumbWith.  Expected "
+                                                           , show t1 ++ " and " ++ show t2
+                                                           , " but got "
+                                                           , show t1' ++ " and " ++ show t2'
+                                                           ]
+                    in  fromJust (apply ew1 ew2)
+                  )
+      -- undefined
+-- collapseTExpr (TEO2 o t1 t2) = case (collapseTExpr t1, collapseTExpr t2) of
+--                                  (PT (n :: Sing n) f, PT (m :: Sing m) g) ->
+--                                    PT (addSN n m) $ \(ts :: Vec (NPlus n m) ETypeW) ->
+--                                      let Just etw1 = f <$> takeVec n ts
+--                                          etw2 = applyOnLast g n ts
+--                                      in  case (etw1, etw2) of
+--                                            (ETW t1', ETW t2') -> case o of
+--                                                                    TOEither -> ETW (EEither t1' t2')
+--                                                                    TOTuple -> ETW (ETup t1' t2')
+--                                                                    TOFunc -> ETW (EFunc t1' t2')
