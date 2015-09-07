@@ -77,7 +77,6 @@ infer :: (MonadError TypeError m, MonadReader Env m, MonadState [VName] m, Monad
       => DumbExpr -> m TExpr
 infer e = case e of
             DV v -> lookupEnv v
-
             DO0 o -> case o of
                        I _ -> pure (TEO0 EInt)
                        B _ -> pure (TEO0 EBool)
