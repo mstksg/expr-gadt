@@ -111,6 +111,7 @@ deriving instance Show (EType a)
 deriving instance Show (ETList a)
 -- deriving instance Show (ExprIxW a)
 -- deriving instance Show ExprW'
+deriving instance Show (ExprWIx a)
 deriving instance Show ExprW
 deriving instance Show ETypeW
 deriving instance Eq (Indexor ks k)
