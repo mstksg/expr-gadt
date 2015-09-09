@@ -1,6 +1,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module Data.ExprGADT.Dumb.Infer where
 
@@ -36,6 +37,31 @@ data Env = TypeEnv { types :: Map VName Scheme }
 instance Monoid Env where
     mempty = TypeEnv M.empty
     mappend (TypeEnv x) (TypeEnv y) = TypeEnv (M.union x y)
+
+data TExpr :: * where
+    TEV      :: TVar    -> TExpr
+    TEO0     :: EType a -> TExpr
+    TEO1     :: TOp1    -> TExpr -> TExpr
+    TEO2     :: TOp2    -> TExpr -> TExpr -> TExpr
+
+data TypeError :: * where
+    TErrUnbound :: VName -> TypeError
+    TErrInfType :: TVar -> TExpr -> TypeError
+    TErrMismatch :: [TExpr] -> [TExpr] -> TypeError
+    TErrUniFail :: TExpr -> TExpr -> TypeError
+  deriving Show
+
+deriving instance Show TExpr
+
+instance Eq TExpr where
+    TEV v  == TEV u  = v == u
+    TEO0 t == TEO0 s = eTypeEq t s
+    TEO1 o1 t1 == TEO1 o2 t2 = o1 == o2 && t1 == t2
+    TEO2 o1 t1 t1' == TEO2 o2 t2 t2' = o1 == o2 && t1 == t2 && t1' == t2'
+    _ == _ = False
+
+
+
 
 varNames :: [VName]
 varNames = [ v : if n == 0 then "" else show (n :: Int)

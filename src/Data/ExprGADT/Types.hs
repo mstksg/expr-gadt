@@ -122,6 +122,10 @@ deriving instance Eq (Op3 a b c d)
 -- deriving instance Eq (EType a)
 -- deriving instance Eq ExprW'
 
+impossible :: String -> a
+impossible [] = error "Impossible branch prevented by type system"
+impossible str = error $ "Impossible branch prevented by type system: " ++ str
+
 class ToExpr a where
     toExpr :: a -> Expr vs a
 

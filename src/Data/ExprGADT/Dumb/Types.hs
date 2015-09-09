@@ -16,7 +16,7 @@ import Data.ExprGADT.Types
 
 type VName = String
 
-newtype TVar = TV String
+newtype TVar = TV VName
              deriving (Show, Eq, Ord)
 
 data DumbExpr :: * where
@@ -27,11 +27,11 @@ data DumbExpr :: * where
     DO3     :: Op3 a b c d  -> DumbExpr -> DumbExpr -> DumbExpr -> DumbExpr
     DLambda :: VName        -> DumbExpr -> DumbExpr
 
-data TExpr :: * where
-    TEV      :: TVar    -> TExpr
-    TEO0     :: EType a -> TExpr
-    TEO1     :: TOp1    -> TExpr -> TExpr
-    TEO2     :: TOp2    -> TExpr -> TExpr -> TExpr
+data TOp0 :: * where
+    TOInt ::  TOp0
+    TOBool ::  TOp0
+    TOUnit ::  TOp0
+  deriving (Show, Eq)
 
 data TOp1 :: * where
     TOList :: TOp1
@@ -43,21 +43,4 @@ data TOp2 :: * where
     TOTuple :: TOp2
   deriving (Show, Eq)
 
-data TypeError :: * where
-    TErrUnbound :: VName -> TypeError
-    TErrInfType :: TVar -> TExpr -> TypeError
-    TErrMismatch :: [TExpr] -> [TExpr] -> TypeError
-    TErrUniFail :: TExpr -> TExpr -> TypeError
-  deriving Show
-
-
 deriving instance Show DumbExpr
-deriving instance Show TExpr
-
-instance Eq TExpr where
-    TEV v  == TEV u  = v == u
-    TEO0 t == TEO0 s = eTypeEq t s
-    TEO1 o1 t1 == TEO1 o2 t2 = o1 == o2 && t1 == t2
-    TEO2 o1 t1 t1' == TEO2 o2 t2 t2' = o1 == o2 && t1 == t2 && t1' == t2'
-    _ == _ = False
-

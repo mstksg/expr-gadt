@@ -63,6 +63,9 @@ data NatIxor :: PNat -> * where
     NIZ :: NatIxor ('NS n)
     NIS :: NatIxor n -> NatIxor ('NS n)
 
+deriving instance Eq (NatIxor n)
+deriving instance Ord (NatIxor n)
+
 type family NComp (n :: PNat) (m :: PNat) :: Ordering where
     NComp 'NZ 'NZ = 'EQ
     NComp n 'NZ = 'GT
@@ -74,68 +77,287 @@ indexVec (x :> _ ) NIZ     = x
 indexVec (_ :> xs) (NIS i) = indexVec xs i
 indexVec VNil _ = error "come on ghc..."
 
+takeVec :: Sing n -> Vec m a -> Maybe (Vec n a)
+takeVec SNZ _             = Just VNil
+takeVec (SNS n) (x :> xs) = (x :>) <$> takeVec n xs
+takeVec (SNS _) VNil      = Nothing
+
+applyOnLast :: (Vec m a -> b) -> Sing n -> Vec (NPlus n m) a -> b
+applyOnLast f SNZ xs = f xs
+applyOnLast f (SNS i) (_ :> xs) = applyOnLast f i xs
+applyOnLast _ (SNS _) _ = error "impossible...cannot be called."
+
 shiftNIx :: Sing n -> NatIxor m -> NatIxor (NPlus n m)
 shiftNIx = undefined
+
+data TypeError = TErrUniFail
+               | TErrInfType
+               | TErrUnboundVar VName
+
+data TExpr :: PNat -> PNat -> * where
+    TEVB     :: NatIxor b -> TExpr b u
+    TEVU     :: NatIxor u -> TExpr b u
+    TEO0     :: TOp0 -> TExpr b u
+    TEO1     :: TOp1 -> TExpr b u -> TExpr b u
+    TEO2     :: TOp2 -> TExpr b u -> TExpr b u -> TExpr b u
+    TEForall :: TExpr b ('NS u) -> TExpr ('NS b) u
+    -- TESub    :: TExpr b ('NS u) -> TExpr b u -> TExpr b u
+
+type TExpr' = TExpr 'NZ
+
+fromTExpr :: forall a b u.
+             (NatIxor b -> a)
+          -> (NatIxor u -> a)
+          -> (TOp0 -> a)
+          -> (TOp1 -> a -> a)
+          -> (TOp2 -> a -> a -> a)
+          -> TExpr b u
+          -> a
+fromTExpr fb fu f0 f1 f2 = go
+  where
+    go :: TExpr b u -> a
+    go e = case e of
+             TEVB i       -> fb i
+             TEVU i       -> fu i
+             TEO0 o       -> f0 o
+             TEO1 o e1    -> f1 o (go e1)
+             TEO2 o e1 e2 -> f2 o (go e1) (go e2)
+             TEForall e1  -> let fb' :: (b ~ 'NS b') => NatIxor b' -> a
+                                 fb' i = fb (NIS i)
+                                 fu' :: NatIxor ('NS u) -> a
+                                 fu' NIZ     = fb NIZ
+                                 fu' (NIS i) = fu i
+                             in  fromTExpr fb' fu' f0 f1 f2 e1
+             -- TESub e1 t  -> fromTExpr bs (t :> us) f0 f1 f2 e1
+
+tExprToETW :: Vec b ETypeW -> Vec u ETypeW -> TExpr b u -> ETypeW
+tExprToETW bs us = fromTExpr (indexVec bs) (indexVec us) f0 f1 f2
+  where
+    f0 o = case o of
+             TOInt  -> ETW EInt
+             TOBool -> ETW EBool
+             TOUnit -> ETW EUnit
+    f1 TOList (ETW t) = ETW (EList t)
+    f2 o (ETW t1) (ETW t2) =
+            case o of
+              TOTuple -> ETW (ETup t1 t2)
+              TOEither -> ETW (EEither t1 t2)
+              TOFunc -> ETW (EFunc t1 t2)
+
+data TExprBW :: PNat -> * where
+    TEBW :: Sing b -> TExpr b u -> TExprBW u
+
+data Env :: PNat -> * where
+    Env :: Map VName (TExprBW u) -> Env u
+
+extendEnv :: VName -> TExprBW u -> Env u -> Env u
+extendEnv v t (Env m) = Env $ M.insert v t m
+
+data Subst :: PNat -> PNat -> * where
+    Subst :: (NatIxor u -> TExpr' v) -> Subst u v
+
+nullSubst :: Subst u u
+nullSubst = Subst TEVU
+
+composeSubst :: forall u v w. Subst u v -> Subst v w -> Subst u w
+composeSubst (Subst f) (Subst g) = Subst h
+  where
+    h :: NatIxor u -> TExpr' w
+    h = fromTExpr (impossible "") g TEO0 TEO1 TEO2 . f
+
+unify :: TExpr' u -> TExpr' u -> Either TypeError (Subst u u)
+unify (TEO0 o) (TEO0 o') | o == o' = return nullSubst
+unify (TEO1 o t) (TEO1 o' t') | o == o' = unify t t'
+unify (TEO2 o t s) (TEO2 o' t' s') | o == o' = do
+    subt <- unify t t'
+    subs <- unify s s'
+    return $ composeSubst subt subs
+unify (TEVU v) t = bind v t
+unify t (TEVU v) = bind v t
+unify (TEVB _) (TEVB _) = impossible ""
+unify _ _ = throwError TErrUniFail
+
+bind :: forall u. NatIxor u -> TExpr' u -> Either TypeError (Subst u u)
+bind v t = case t of
+             TEVU v' | v == v'       -> return nullSubst
+             _       | occursCheck t -> throwError TErrInfType
+                     | otherwise     -> return (singleSubst v t)
+  where
+    occursCheck :: TExpr' u -> Bool
+    occursCheck (TEO0 _) = False
+    occursCheck (TEO1 _ t1) = occursCheck t1
+    occursCheck (TEO2 _ t1 t2) = occursCheck t1 || occursCheck t2
+    occursCheck (TEVU v') = v == v'
+    occursCheck (TEVB _) = impossible ""
+
+-- should really be Subst ('NS u) u, but?  need arb-conversion of NatIxor
+-- too lazy atm.
+singleSubst :: NatIxor u -> TExpr' u -> Subst u u
+singleSubst v t = Subst $ \i -> if v == i then t
+                                          else TEVU i
+
+-- data PolyExpr :: [*] -> * where
+--     PE :: Sing n -> (Vec n ETypeW -> ExprWIx vs) -> PolyExpr vs
+
+data PolyExpr :: * where
+    PE :: Sing n -> (Vec n ETypeW -> ExprW) -> PolyExpr
+
+-- unDumbWith :: Env u -> Vec u ETypeW -> DumbExpr -> PolyExpr
+-- unDumbWith env us e = case e of
+--                         TEVU
+
+-- data UnDumb :: * where
+--     EWT :: TExpr b u -> ()
+
+-- dropIn :: a -> NatIxor n -> NatIxor ('NS m) -> Either a (NatIxor m)
+-- dropIn x i p = case p of
+--                  NIS ip -> undefined
+
+-- infer :: forall u. Env u -> DumbExpr -> Either TypeError (Subst u u, TExprBW u)
+-- infer env@(Env mp) e =
+--     case e of
+--       DV v -> case M.lookup v mp of
+--                 Nothing -> throwError $ TErrUnboundVar v
+--                 Just t  -> return (nullSubst, t)
+--       DLambda v e1 -> do
+--         let env' = extendEnv v (TEBW SNZ fresh) (bumpUp env)
+--         (s1, t1) <- infer env' e1
+--         return $ (s1, undefined)
+--   where
+--     bumpUp :: Env v -> Env ('NS v)
+--     bumpUp = undefined
+-- -- extendEnv :: SingI b => VName -> TExpr b u -> Env u -> Env u
+
+    -- DLambda :: VName        -> DumbExpr -> DumbExpr
+
+-- fresh :: TExpr' ('NS n)
+-- fresh = TEVU NIZ
+
+
+-- data TExpr :: PNat -> * where
+--     TEV :: NatIxor v -> TExpr v
+--     TEO0 :: TOp0 -> TExpr v
+--     TEO1 :: TOp1 -> TExpr v -> TExpr v
+--     TEO2 :: TOp2 -> TExpr v -> TExpr v -> TExpr v
+--     TEForall :: TExpr ('NS v) -> TExpr v
+
+-- data PolyType :: * where
+--     PT :: Sing n -> (Vec n ETypeW -> ETypeW) -> PolyType
+
+-- data PolyTExpr :: PNat -> * where
+--     PTE :: Sing n -> (Vec n (TExpr m) -> TExpr m) -> PolyTExpr m
+
+-- fromTExpr :: forall v. (NatIxor v -> ETypeW) -> TExpr v -> PolyType
+-- fromTExpr f (TEV i) = PT SNZ (\_ -> f i)
+-- fromTExpr _ (TEO0 o) =
+--     case o of
+--       TOInt  -> PT SNZ (\_ -> ETW EInt)
+--       TOBool -> PT SNZ (\_ -> ETW EBool)
+--       TOUnit -> PT SNZ (\_ -> ETW EUnit)
+-- fromTExpr f (TEO1 o e1) =
+--     case fromTExpr f e1 of
+--       PT n g -> PT n $ \ts ->
+--         case g ts of
+--           ETW t -> case o of
+--                      TOList -> ETW (EList t)
+-- fromTExpr f (TEO2 o e1 e2) =
+--     case (fromTExpr f e1, fromTExpr f e2) of
+--       (PT n1 g1, PT n2 g2) ->
+--         PT (sNPlus n1 n2) $ \ts ->
+--           let Just etw1 = g1 <$> takeVec n1 ts
+--               etw2 = applyOnLast g2 n1 ts
+--           in  case (etw1, etw2) of
+--                 (ETW t1, ETW t2) -> case o of
+--                                       TOTuple -> ETW (ETup t1 t2)
+--                                       TOEither -> ETW (EEither t1 t2)
+--                                       TOFunc -> ETW (EFunc t1 t2)
+-- fromTExpr f (TEForall eλ) = undefined
+--   where
+--     breakDown :: TExpr ('NS u) -> PolyTExpr u
+--     breakDown (TEV NIZ)      = PTE (SNS SNZ) (\(t :> VNil) -> t)
+--     breakDown (TEV (NIS i))  = PTE SNZ (\VNil -> TEV i)
+--     breakDown (TEO0 o)       = PTE SNZ (\VNil -> TEO0 o)
+--     breakDown (TEO1 o e1)    = case breakDown e1 of
+--                                  PTE n g -> PTE n (TEO1 o . g)
+--     breakDown (TEO2 o e1 e2) = case (breakDown e1, breakDown e2) of
+--                                  (PTE n1 g1, PTE n2 g2) ->
+--                                    PTE (sNPlus n1 n2) $ \ts ->
+--                                      let Just ts1 = g1 <$> takeVec n1 ts
+--                                          ts2      = applyOnLast g2 n1 ts
+--                                      in  TEO2 o ts1 ts2
+--     breakDown (TEForall eλ') = case breakDown eλ' of
+--                                  PTE n g -> PTE (SNS n) $ \(t :> ts) ->
+--                                    undefined
+    -- breakDown (TEV i) = PT SNZ (\VNil -> i)
+    -- let f' :: NatIxor ('NS v) -> ETypeW
+    --     f' NIZ = undefined
+    --     f' (NIS i) = f i
+    -- in  case fromTExpr f e1 of
+    --       _ -> undefined
+          -- PT n g -> PT (SNS n) $ \(ETW t :> ts) ->
+          --   g ts
+
+
 
 -- unshiftNIx :: NatIxor m -> NatIxor (NPlus m n)
 -- unshiftNIx :: NatIxor n -> NatIxor (NPlus m n)
 -- unshiftNIx NIZ = NIZ
 
-data Subst :: * where
-    Subst :: Sing n -> Map VName (NatIxor n) -> Vec n TExpr -> Subst
+-- data Subst :: * where
+--     Subst :: Sing n -> Map VName (NatIxor n) -> Vec n TExpr -> Subst
 
-nullSubst :: Subst
-nullSubst = Subst SNZ M.empty VNil
+-- nullSubst :: Subst
+-- nullSubst = Subst SNZ M.empty VNil
 
-singleSubst :: TVar -> TExpr -> Subst
-singleSubst (TV v) t = Subst (SNS SNZ) (M.singleton v NIZ) (t :> VNil)
+-- singleSubst :: TVar -> TExpr -> Subst
+-- singleSubst (TV v) t = Subst (SNS SNZ) (M.singleton v NIZ) (t :> VNil)
 
-composeSubst :: Subst -> Subst -> Subst
-composeSubst (Subst (n1 :: Sing n) m1 v1)
-             (Subst (n2 :: Sing m) m2 v2)
-           = Subst (sNPlus n1 n2) mp (concatVec v1 (fmap apl v2))
-  where
-    apl :: TExpr -> TExpr
-    apl (TEO0 t) = TEO0 t
-    apl (TEO1 o t) = TEO1 o (apl t)
-    apl (TEO2 o t t') = TEO2 o (apl t) (apl t')
-    apl te@(TEV (TV v)) = maybe te (indexVec v1) $ M.lookup v m1
-    mp :: Map VName (NatIxor (NPlus n m))
-    mp = fmap coerceNIx m1 `M.union` fmap (shiftNIx n1) m2
-    coerceNIx :: forall q. NatIxor q -> NatIxor (NPlus q m)
-    coerceNIx NIZ     = NIZ
-    coerceNIx (NIS i) = NIS (coerceNIx i)
+-- composeSubst :: Subst -> Subst -> Subst
+-- composeSubst (Subst (n1 :: Sing n) m1 v1)
+--              (Subst (n2 :: Sing m) m2 v2)
+--            = Subst (sNPlus n1 n2) mp (concatVec v1 (fmap apl v2))
+--   where
+--     apl :: TExpr -> TExpr
+--     apl (TEO0 t) = TEO0 t
+--     apl (TEO1 o t) = TEO1 o (apl t)
+--     apl (TEO2 o t t') = TEO2 o (apl t) (apl t')
+--     apl te@(TEV (TV v)) = maybe te (indexVec v1) $ M.lookup v m1
+--     mp :: Map VName (NatIxor (NPlus n m))
+--     mp = fmap coerceNIx m1 `M.union` fmap (shiftNIx n1) m2
+--     coerceNIx :: forall q. NatIxor q -> NatIxor (NPlus q m)
+--     coerceNIx NIZ     = NIZ
+--     coerceNIx (NIS i) = NIS (coerceNIx i)
 
-unify :: TExpr -> TExpr -> Either TypeError Subst
-unify (TEV v) t = bind v t
-unify t (TEV v) = bind v t
-unify (TEO0 t) (TEO0 t')      | Just Ty.Refl <- tyEq t t' = return  nullSubst
-unify (TEO1 o t) (TEO1 o' t') | o == o' = unify t t'
-unify (TEO2 o t u) (TEO2 o' t' u') | o == o' = do
-    st <- unify t t'
-    su <- unify u u'
-    return $ composeSubst st su
-unify t u = throwError $ TErrUniFail t u
+-- unify :: TExpr -> TExpr -> Either TypeError Subst
+-- unify (TEV v) t = bind v t
+-- unify t (TEV v) = bind v t
+-- unify (TEO0 t) (TEO0 t')      | Just Ty.Refl <- tyEq t t' = return  nullSubst
+-- unify (TEO1 o t) (TEO1 o' t') | o == o' = unify t t'
+-- unify (TEO2 o t u) (TEO2 o' t' u') | o == o' = do
+--     st <- unify t t'
+--     su <- unify u u'
+--     return $ composeSubst st su
+-- unify t u = throwError $ TErrUniFail t u
 
-bind :: TVar -> TExpr -> Either TypeError Subst
-bind v t | t == TEV v    = return nullSubst
-         | occursCheck t = throwError $ TErrInfType v t
-         | otherwise     = return (singleSubst v t)
-  where
-    occursCheck (TEO0 _)        = False
-    occursCheck (TEO1 _ t')     = occursCheck t'
-    occursCheck (TEO2 _ t' t'') = occursCheck t' || occursCheck t''
-    occursCheck (TEV v')        = v == v'
+-- bind :: TVar -> TExpr -> Either TypeError Subst
+-- bind v t | t == TEV v    = return nullSubst
+--          | occursCheck t = throwError $ TErrInfType v t
+--          | otherwise     = return (singleSubst v t)
+--   where
+--     occursCheck (TEO0 _)        = False
+--     occursCheck (TEO1 _ t')     = occursCheck t'
+--     occursCheck (TEO2 _ t' t'') = occursCheck t' || occursCheck t''
+--     occursCheck (TEV v')        = v == v'
 
--- data Scheme :: * where
---     Forall :: Sing n -> (Vec n ETypeW -> TExpr)
-    -- Subst :: Sing n -> Map VName (NatIxor n) -> Vec n TExpr -> Subst
+-- -- data Scheme :: * where
+-- --     Forall :: Sing n -> (Vec n ETypeW -> TExpr)
+--     -- Subst :: Sing n -> Map VName (NatIxor n) -> Vec n TExpr -> Subst
 
-data Env = Env
-data PolyExpr = PolyExpr
+-- data Env = Env
+-- data PolyExpr = PolyExpr
 
-unDumbWith :: Env -> DumbExpr -> Either TypeError PolyExpr
-unDumbWith = undefined
+-- unDumbWith :: Env -> DumbExpr -> Either TypeError PolyExpr
+-- unDumbWith = undefined
 
 -- data PolyType :: * where
 --     PT :: Sing n -> (Vec n ETypeW -> ETypeW) -> PolyType
@@ -326,9 +548,9 @@ unDumbWith = undefined
 --                        Ap      -> unDumbAp e1 e2
 --       -- DLambda v eλ -> do
 --       --     let ude' = case ude of
---       --                  UDE mp vs -> UDE 
+--       --                  UDE mp vs -> UDE
 --     -- UDE :: (CompIx vs ('NS n) ~ 'LT) => Map VName (NatIxor n) -> ETList vs -> UDEnv vs
---           -- eλ <- 
+--           -- eλ <-
 --       -- DO3 o e1 e2 e3 -> do
 --       --   PE ts1 vh1 f1 <- unDumbWith ude e1
 --       --   PE ts2 vh2 f2 <- unDumbWith ude e2
