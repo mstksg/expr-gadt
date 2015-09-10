@@ -39,29 +39,19 @@ instance Monoid Env where
     mappend (TypeEnv x) (TypeEnv y) = TypeEnv (M.union x y)
 
 data TExpr :: * where
-    TEV      :: TVar    -> TExpr
-    TEO0     :: EType a -> TExpr
-    TEO1     :: TOp1    -> TExpr -> TExpr
-    TEO2     :: TOp2    -> TExpr -> TExpr -> TExpr
+    TEV      :: TVar -> TExpr
+    TEO0     :: TOp0 -> TExpr
+    TEO1     :: TOp1 -> TExpr -> TExpr
+    TEO2     :: TOp2 -> TExpr -> TExpr -> TExpr
+  deriving (Show, Eq)
 
 data TypeError :: * where
     TErrUnbound :: VName -> TypeError
     TErrInfType :: TVar -> TExpr -> TypeError
     TErrMismatch :: [TExpr] -> [TExpr] -> TypeError
     TErrUniFail :: TExpr -> TExpr -> TypeError
+    TErrBottom :: TypeError
   deriving Show
-
-deriving instance Show TExpr
-
-instance Eq TExpr where
-    TEV v  == TEV u  = v == u
-    TEO0 t == TEO0 s = eTypeEq t s
-    TEO1 o1 t1 == TEO1 o2 t2 = o1 == o2 && t1 == t2
-    TEO2 o1 t1 t1' == TEO2 o2 t2 t2' = o1 == o2 && t1 == t2 && t1' == t2'
-    _ == _ = False
-
-
-
 
 varNames :: [VName]
 varNames = [ v : if n == 0 then "" else show (n :: Int)
@@ -104,9 +94,9 @@ infer :: (MonadError TypeError m, MonadReader Env m, MonadState [VName] m, Monad
 infer e = case e of
             DV v -> lookupEnv v
             DO0 o -> case o of
-                       I _ -> pure (TEO0 EInt)
-                       B _ -> pure (TEO0 EBool)
-                       Unit -> pure (TEO0 EUnit)
+                       I _ -> pure tInt
+                       B _ -> pure tBool
+                       Unit -> pure (TEO0 TOUnit)
                        Nil -> do
                          t1 <- fresh
                          tv <- fresh
@@ -156,8 +146,8 @@ infer e = case e of
                         t3 <- fresh
                         uni t1 (TEO2 TOFunc t2 t3)
                         return $ t1 `tFunc` (t2 `tFunc` t3)
-                      Div     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 EUnit) tInt)
-                      Mod     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 EUnit) tInt)
+                      Div     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 TOUnit) tInt)
+                      Mod     -> return $ tInt `tFunc` (tInt `tFunc` TEO2 TOEither (TEO0 TOUnit) tInt)
               uni u1 u2
               return tv
             DO3 o e1 e2 e3 -> do
@@ -194,8 +184,8 @@ infer e = case e of
               t <- inEnv (x, Forall [] tv) (infer e1)
               return (tv `tFunc` t)
   where
-    tInt = TEO0 EInt
-    tBool = TEO0 EBool
+    tInt = TEO0 TOInt
+    tBool = TEO0 TOBool
     tFunc = TEO2 TOFunc
     uni :: MonadWriter [Constraint] m => TExpr -> TExpr -> m ()
     uni t1 t2 = tell [(t1, t2)]
