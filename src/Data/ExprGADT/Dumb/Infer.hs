@@ -5,10 +5,12 @@
 
 module Data.ExprGADT.Dumb.Infer where
 
+import Control.Exception
 import Control.Arrow
 import Control.Monad.Except
 import Control.Monad.RWS
 import Data.ExprGADT.Dumb.Types
+import Data.Typeable
 import Data.ExprGADT.Types
 import Data.List                (nub)
 import Data.Map                 (Map)
@@ -17,7 +19,7 @@ import qualified Data.Map       as M
 import qualified Data.Set       as S
 
 data Scheme = Forall [TVar] TExpr
-            deriving Show
+            deriving (Show, Eq)
 
 newtype InferState = InferState { count :: Int }
 
@@ -32,11 +34,11 @@ instance Monoid Subst where
 type Constraint = (TExpr, TExpr)
 type Unifier = (Subst, [Constraint])
 
-data Env = TypeEnv { types :: Map VName Scheme }
+data Env = Env { envTypes :: Map VName Scheme }
 
 instance Monoid Env where
-    mempty = TypeEnv M.empty
-    mappend (TypeEnv x) (TypeEnv y) = TypeEnv (M.union x y)
+    mempty = Env M.empty
+    mappend (Env x) (Env y) = Env (M.union x y)
 
 data TExpr :: * where
     TEV      :: TVar -> TExpr
@@ -51,7 +53,9 @@ data TypeError :: * where
     TErrMismatch :: [TExpr] -> [TExpr] -> TypeError
     TErrUniFail :: TExpr -> TExpr -> TypeError
     TErrBottom :: TypeError
-  deriving Show
+  deriving (Show, Typeable)
+
+instance Exception TypeError
 
 varNames :: [VName]
 varNames = [ v : if n == 0 then "" else show (n :: Int)
@@ -67,7 +71,7 @@ inferExpr env ex = do
     subst <- solver (mempty, cs)
     return $ closeOver (applyTExpr subst ty)
   where
-    closeOver = normalize . generalize (TypeEnv M.empty)
+    closeOver = normalize . generalize (Env M.empty)
     normalize (Forall _ body) = Forall (map snd ord') (normtype body)
       where
         ord' = zip (nub (fv body)) (map TV varNames)
@@ -85,7 +89,7 @@ inferExpr env ex = do
     generalize env' t = Forall as t
       where
         as = S.toList $ ftvTExpr t `S.difference` ftvEnv env'
-        ftvEnv = S.unions . map ftvScheme . M.elems . types
+        ftvEnv = S.unions . map ftvScheme . M.elems . envTypes
     ftvScheme (Forall as t) = ftvTExpr t `S.difference` S.fromList as
 
 
@@ -191,7 +195,7 @@ infer e = case e of
     uni t1 t2 = tell [(t1, t2)]
     lookupEnv :: (MonadState [VName] m, MonadError TypeError m, MonadReader Env m) => VName -> m TExpr
     lookupEnv x = do
-        TypeEnv env <- ask
+        Env env <- ask
         case M.lookup x env of
           Nothing -> throwError $ TErrUnbound x
           Just t -> instantiate t
@@ -203,9 +207,9 @@ infer e = case e of
     inEnv :: MonadReader Env m => (VName, Scheme) -> m a -> m a
     inEnv (x, sc) = local $ \e' -> remove e' x `extend` (x, sc)
     extend :: Env -> (VName, Scheme) -> Env
-    extend env (x, s) = env { types = M.insert x s (types env) }
+    extend env (x, s) = env { envTypes = M.insert x s (envTypes env) }
     remove :: Env -> VName -> Env
-    remove (TypeEnv env) x = TypeEnv (M.delete x env)
+    remove (Env env) x = Env (M.delete x env)
 
 fresh :: MonadState [VName] m => m TExpr
 fresh = state $ \(x:xs) -> (TEV (TV x), xs)

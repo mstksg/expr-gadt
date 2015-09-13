@@ -16,7 +16,7 @@ import Data.ExprGADT.Types
 
 type VName = String
 
-newtype TVar = TV VName
+newtype TVar = TV { tvVName :: VName }
              deriving (Show, Eq, Ord)
 
 data DumbExpr :: * where

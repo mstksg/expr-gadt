@@ -4,6 +4,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MonadComprehensions #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
@@ -22,7 +23,11 @@ import Control.Applicative
 import Control.Exception
 import Control.Monad.Except
 import Data.ExprGADT.Dumb.Infer
+import Data.List
 import Data.ExprGADT.Dumb.Types
+import Data.Foldable
+import Data.Monoid
+import Data.ExprGADT.Eval
 import Data.ExprGADT.Traversals
 import Data.ExprGADT.Types
 import Data.IsTy
@@ -42,6 +47,14 @@ $(singletons [d|
 
     data PNat = NZ | NS PNat deriving (Eq, Show, Ord)
 
+    nPlus :: PNat -> PNat -> PNat
+    nPlus NZ     y = y
+    nPlus (NS x) y = NS (nPlus x y)
+
+    nLTE :: PNat -> PNat -> Bool
+    nLTE NZ y = True
+    nLTE (NS x) (NS y) = nLTE x y
+
   |])
 
 data Vec :: PNat -> * -> * where
@@ -50,19 +63,226 @@ data Vec :: PNat -> * -> * where
 
 infixr 5 :>
 
+data VecW :: * -> * where
+    VW :: Sing n -> Vec n a -> VecW a
+
+type family LengthP (xs :: [k]) :: PNat where
+    LengthP '[] = NZ
+    LengthP (x ': xs) = NS (LengthP xs)
+
+takeVec :: Sing n -> Vec m a -> Maybe (Vec n a)
+takeVec SNZ _             = Just VNil
+takeVec (SNS n) (x :> xs) = (x :>) <$> takeVec n xs
+takeVec (SNS _) VNil      = Nothing
+
+-- takeVec :: (NLTE n m ~ 'True) => Sing n -> Vec m a -> Vec n a
+-- takeVec SNZ _             = VNil
+-- takeVec (SNS n) (x :> xs) = x :> takeVec n xs
+
+applyOnLast :: (Vec m a -> b) -> Sing n -> Vec (NPlus n m) a -> b
+applyOnLast f SNZ xs = f xs
+applyOnLast f (SNS i) (_ :> xs) = applyOnLast f i xs
+applyOnLast _ (SNS _) _ = error "impossible...cannot be called."
+
 data PolyExpr :: * where
     PE :: Sing n -> (Vec n ETypeW -> ExprW) -> PolyExpr
 
-unDumbWith :: Env -> DumbExpr -> Either TypeError PolyExpr
-unDumbWith env e =
+data PolyType :: * where
+    PT :: Sing n -> (Vec n ETypeW -> ETypeW) -> PolyType
+
+data ETListW :: * where
+    ETLW :: ETList ts -> ETListW
+
+data IndexorW :: [*] -> * where
+    IXW :: EType a -> Indexor vs a -> IndexorW vs
+
+deriving instance Show (IndexorW vs)
+
+data EnvO = EnvO { envTypesO :: [(VName, Scheme)] }
+          deriving (Show, Eq)
+
+-- what is base case?
+realizeScheme :: EnvO -> Scheme -> PolyType
+realizeScheme env@EnvO{..} sch@(Forall ts t) =
+    case listToVecW ts of
+      VW n vs ->
+        PT n $ \ts ->
+          let go te = case te of
+                        TEO0 o -> case o of
+                                    TOInt  -> ETW EInt
+                                    TOBool -> ETW EBool
+                                    TOUnit -> ETW EUnit
+                        TEO1 o t1 -> case go t1 of
+                                       ETW t1' -> case o of
+                                                    TOList -> ETW (EList t1')
+                        TEO2 o t1 t2 -> case (go t1, go t2) of
+                                          (ETW t1', ETW t2') ->
+                                            case o of
+                                              TOTuple -> ETW (ETup t1' t2')
+                                              TOEither -> ETW (EEither t1' t2')
+                                              TOFunc -> ETW (EFunc t1' t2')
+                        TEV v -> fromMaybe undefined
+                             $ (fmap snd . find ((== v) . fst) $ zipVec vs ts)
+                           <|> (undefined envTypesO)
+          in  go t
+          -- let ts'  = Forall [] . etwToTExpr <$> ts
+          --     env' = EnvO $ toList (zipVec (tvVName <$> vs) ts') ++ envTypesO
+          -- in  case realizeType env' t of
+          --       Nothing -> error $ "malformed scheme " ++ show sch
+          --       Just (PT n' f) -> f _
+              -- PT n' f   = fromMaybe (error $ "malformed scheme " ++ show sch)
+              --           $ realizeType env' t
+          -- in  f _
+    -- case lengthSing ts of
+    --   SomeSing n -> return $
+    --     PT n $ \ts -> do
+    --       let env' = undefined
+    --       undefined
+    -- let env' = ts ++ env
+    -- PT n f <- realizeType env t
+--     return . PT n $ \ts -> do
+--       let t0 = f ts
+--       undefined
+    -- return $ PT
+--   case lengthSing ts of
+--     SomeSing n -> PT n $ \ts ->
+  --     case t of
+  --       TEO0 o -> case o of
+  --                   TOInt -> ETW EInt
+  --                   TOBool -> ETW EBool
+  --                   TOUnit -> ETW EUnit
+    -- TEV      :: TVar -> TExpr
+    -- TEO0     :: TOp0 -> TExpr
+    -- TEO1     :: TOp1 -> TExpr -> TExpr
+    -- TEO2     :: TOp2 -> TExpr -> TExpr -> TExpr
+
+etwToTExpr :: ETypeW -> TExpr
+etwToTExpr (ETW t) = case t of
+                       EInt -> TEO0 TOInt
+                       EBool -> TEO0 TOBool
+                       EUnit -> TEO0 TOUnit
+                       EList t1 -> TEO1 TOList (etwToTExpr (ETW t1))
+                       ETup t1 t2 -> TEO2 TOTuple (etwToTExpr (ETW t1)) (etwToTExpr (ETW t2))
+                       EEither t1 t2 -> TEO2 TOEither (etwToTExpr (ETW t1)) (etwToTExpr (ETW t2))
+                       EFunc t1 t2 -> TEO2 TOFunc (etwToTExpr (ETW t1)) (etwToTExpr (ETW t2))
+
+-- realizeType :: EnvO -> TExpr -> Maybe PolyType
+-- realizeType env@EnvO{..} = go
+--   where
+--     go t =
+--       case t of
+--         TEV (TV v) -> do
+--           sch <- lookup v envTypesO
+--           realizeScheme env sch
+--         TEO0 o ->
+--           return $ PT SNZ (\VNil -> case o of
+--                               TOInt  -> ETW EInt
+--                               TOBool -> ETW EBool
+--                               TOUnit -> ETW EUnit
+--                           )
+--         TEO1 o t1 -> do
+--           PT n1 f1 <- go t1
+--           return $ PT n1 (\ts -> case f1 ts of
+--                                    ETW t1' ->
+--                                      case o of
+--                                        TOList -> ETW (EList t1')
+--                          )
+--         TEO2 o t1 t2 -> do
+--           PT n1 f1 <- go t1
+--           PT n2 f2 <- go t2
+--           let n3 = sNPlus n1 n2
+--           return $ PT n3 (\ts -> fromMaybe (error "whaaaat") $ do
+--                                    ETW t1' <- f1 <$> takeVec n1 ts
+--                                    ETW t2' <- Just $ applyOnLast f2 n1 ts
+--                                    return $ case o of
+--                                      TOTuple  -> ETW (ETup t1' t2')
+--                                      TOEither -> ETW (EEither t1' t2')
+--                                      TOFunc   -> ETW (EFunc t1' t2')
+--                          )
+
+instance Functor (Vec n) where
+    fmap _ VNil = VNil
+    fmap f (x :> xs) = f x :> fmap f xs
+
+instance Applicative (Vec 'NZ) where
+    pure _ = VNil
+    _ <*> _ = VNil
+
+instance Applicative (Vec n) => Applicative (Vec ('NS n)) where
+    pure x = x :> pure x
+    (f :> fs) <*> (x :> xs) = f x :> (fs <*> xs)
+
+instance Foldable (Vec n) where
+    foldMap _ VNil = mempty
+    foldMap f (x :> xs) = f x <> foldMap f xs
+
+unsafeIndexVec :: Vec n a -> Int -> a
+unsafeIndexVec VNil _ = error "why"
+unsafeIndexVec (x :> xs) i | i <= 0    = x
+                           | otherwise = unsafeIndexVec xs (i - 1)
+
+zipVec :: Vec n a -> Vec n b -> Vec n (a, b)
+zipVec VNil VNil = VNil
+zipVec (x :> xs) (y :> ys) = (x, y) :> zipVec xs ys
+
+-- zipVecList :: Vec n a -> [b] -> Maybe (Vec n (a, b))
+-- zipVecList VNil _ = Just VNil
+-- zipVecList (x :> xs) (y : ys) = ((x, y) :>) <$> zipVecList xs ys
+-- zipVecList (_ :> _) [] = Nothing
+
+listToVecW :: [a] -> VecW a
+listToVecW []     = VW SNZ VNil
+listToVecW (x:xs) = case listToVecW xs of
+                      VW n vs -> VW (SNS n) (x :> vs)
+
+envoToEnv :: EnvO -> Env
+envoToEnv = Env . M.fromListWith const . envTypesO
+
+varToExpr :: EnvO -> VName -> Either TypeError PolyExpr
+varToExpr EnvO{..} v = do
+    Forall sts t <- maybe (throwError (TErrUnbound v)) return
+                  $ lookup v envTypesO
+    case lengthSing sts of
+      SomeSing n -> return $
+        PE n (\ts -> case toETList ts of
+                       ETLW ts' -> either error id $ do
+                         (_, i) <- maybe (Left ("unfound " ++ v ++ " " ++ show sts)) Right . find ((== TV v) . fst) $ zip sts [0..]
+                         IXW t ixor <- maybe (Left "ungrabbed") Right $ grabVar i ts'
+                         return $ EW ts' t (V ixor)
+             )
+
+lengthSing :: [a] -> SomeSing ('KProxy :: KProxy PNat)
+lengthSing [] = SomeSing SNZ
+lengthSing (_:xs) = case lengthSing xs of
+                      SomeSing n -> SomeSing (SNS n)
+
+grabVar :: Int -> ETList ts -> Maybe (IndexorW ts)
+grabVar n (t :* ts) | n <= 0    = return $ IXW t IZ
+                    | otherwise = do
+                        IXW t' i <- grabVar (n - 1) ts
+                        return $ IXW t' (IS i)
+
+
+toETList :: Vec n ETypeW -> ETListW
+toETList VNil          = ETLW ENil
+toETList (ETW t :> xs) = case toETList xs of
+                           ETLW ets -> ETLW (t :* ets)
+
+unDumb :: DumbExpr -> Either TypeError PolyExpr
+unDumb = unDumbWith $ EnvO []
+
+unDumbWith :: EnvO -> DumbExpr -> Either TypeError PolyExpr
+unDumbWith env e = do
+    _ <- inferExpr env' e
     case e of
+      DV v -> varToExpr env v
       DO0 o -> case o of
                  I _ -> return $ PE SNZ (\_ -> EW ENil EInt (O0 o))
                  B _ -> return $ PE SNZ (\_ -> EW ENil EBool (O0 o))
                  Unit -> return $ PE SNZ (\_ -> EW ENil EUnit (O0 o))
                  Nil -> return $ PE (SNS SNZ) (\(ETW t :> VNil) -> EW ENil (EList t) (O0 Nil))
       DO1 o e1 -> do
-        Forall vs t <- inferExpr env e1
+        Forall vs t <- inferExpr env' e1
         PE n f <- unDumbWith env e1
         case o of
           Abs ->
@@ -119,8 +339,28 @@ unDumbWith env e =
                                         EW{} -> error "bug in inferExpr"
                               )
               TEV v -> throwError TErrBottom
-              t     -> throwError $ TErrMismatch [t] [TEO2 TOTuple (TEV (TV "a")) (TEV (TV "B"))]
+              t     -> throwError $ TErrMismatch [t] [TEO2 TOTuple (TEV (TV "a")) (TEV (TV "b"))]
+      DLambda v eλ -> do
+        -- let env' = TypeEnv . M.insert v () . M.delete v $ types env
+        --       -- t <- inEnv (x, Forall [] tv) (infer e1)
+        Forall vs t <- inferExpr env' e
+        case t of
+          TEO2 TOFunc t1 t2 -> do
+            let newEnv = Env
+                       . M.insert v (Forall [] t1)
+                       . M.delete v
+                       $ envTypes env'
+            PE n f <- unDumbWith undefined eλ
+            return $ PE n (\ts -> case f ts of
+                            EW (t1' :* ts') t2' e1' -> EW ts' (EFunc t1' t2') (Lambda e1')
+                            ew0                     -> error $ "but in inferExpr: " ++ show ew0
+                          )
 
+          TEV v -> throwError TErrBottom
+          t     -> throwError $ TErrMismatch [t] [TEO2 TOFunc (TEV (TV "a")) (TEV (TV "b"))]
+
+  where
+    env' = envoToEnv env
 
     -- Forall vs t <- inferExpr env e
     -- case t of
@@ -325,7 +565,7 @@ unDumbWith env e =
 -- instance (ReNix n ('NS m)) => ReNix ('NS n) ('NS ('NS m)) where
 --     reNix NIZ = NIZ
 --     reNix (NIS i) = NIS (reNix i)
- 
+
 -- -- reNix' :: (NLTE n m ~ 'True) => NatIxor ('NS n) -> NatIxor ('NS m)
 -- -- reNix' NIZ     = NIZ
 -- -- reNix' (NIS i) = NIS (reNix' i)
