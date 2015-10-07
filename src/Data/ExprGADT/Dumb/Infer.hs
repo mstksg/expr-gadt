@@ -40,13 +40,6 @@ instance Monoid Env where
     mempty = Env M.empty
     mappend (Env x) (Env y) = Env (M.union x y)
 
-data TExpr :: * where
-    TEV      :: TVar -> TExpr
-    TEO0     :: TOp0 -> TExpr
-    TEO1     :: TOp1 -> TExpr -> TExpr
-    TEO2     :: TOp2 -> TExpr -> TExpr -> TExpr
-  deriving (Show, Eq)
-
 data TypeError :: * where
     TErrUnbound :: VName -> TypeError
     TErrInfType :: TVar -> TExpr -> TypeError
