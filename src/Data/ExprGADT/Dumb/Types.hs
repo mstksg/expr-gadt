@@ -14,18 +14,18 @@ module Data.ExprGADT.Dumb.Types where
 
 import Data.ExprGADT.Types
 
-type VName = String
+type DBIx = Int
 
-newtype TVar = TV { tvVName :: VName }
+newtype TVar = TV { tvIx :: DBIx }
              deriving (Show, Eq, Ord)
 
 data DumbExpr :: * where
-    DV      :: VName        -> DumbExpr
+    DV      :: DBIx         -> DumbExpr
     DO0     :: Op0 a        -> DumbExpr
     DO1     :: Op1 a b      -> DumbExpr -> DumbExpr
     DO2     :: Op2 a b c    -> DumbExpr -> DumbExpr -> DumbExpr
     DO3     :: Op3 a b c d  -> DumbExpr -> DumbExpr -> DumbExpr -> DumbExpr
-    DLambda :: VName        -> DumbExpr -> DumbExpr
+    DLambda :: DumbExpr -> DumbExpr
 
 data TExpr :: * where
     TEV      :: TVar -> TExpr

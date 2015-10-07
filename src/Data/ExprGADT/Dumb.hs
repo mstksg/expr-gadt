@@ -114,8 +114,8 @@ data NatIxor :: PNat -> * where
     NIZ :: NatIxor n
     NIS :: NatIxor n -> NatIxor ('NS n)
 
-data Env :: PNat -> * where
-    Env :: Map VName (NatIxor n) -> Vec n ETypeW -> Env n
+-- data Env :: PNat -> * where
+--     Env :: Map VName (NatIxor n) -> Vec n ETypeW -> Env n
 
 unDumb :: DumbExpr -> PolyExpr
 unDumb e =
