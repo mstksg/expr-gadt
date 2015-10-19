@@ -27,12 +27,12 @@ data DumbExpr :: * where
     DO3     :: Op3 a b c d  -> DumbExpr -> DumbExpr -> DumbExpr -> DumbExpr
     DLambda :: DumbExpr -> DumbExpr
 
-data TExpr :: * where
-    TEV      :: TVar -> TExpr
-    TEO0     :: TOp0 -> TExpr
-    TEO1     :: TOp1 -> TExpr -> TExpr
-    TEO2     :: TOp2 -> TExpr -> TExpr -> TExpr
-  deriving (Show, Eq)
+-- data TExpr :: * where
+--     TEV      :: TVar -> TExpr
+--     TEO0     :: TOp0 -> TExpr
+--     TEO1     :: TOp1 -> TExpr -> TExpr
+--     TEO2     :: TOp2 -> TExpr -> TExpr -> TExpr
+--   deriving (Show, Eq)
 
 data TOp0 :: * where
     TOInt ::  TOp0
