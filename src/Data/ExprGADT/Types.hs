@@ -12,374 +12,442 @@
 
 module Data.ExprGADT.Types where
 
-import Data.Proxy
-import Control.Applicative
-import Data.Monoid
-import Data.IsTy
-import Data.Proof.EQ
+-- import Data.Proxy
+-- import Control.Applicative
+import Data.Type.Product
+-- import Data.Type.Combinator
+import Type.Family.List as L
+-- import Data.Monoid
+-- import Data.IsTy
+-- import Data.Proof.EQ
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
     IS :: Indexor ks k -> Indexor (j ': ks) k
 
-data HList :: [*] -> * where
-    HNil :: HList '[]
-    (:<) :: a -> HList as -> HList (a ': as)
+type ETList = Prod EType
+type ExprList vs = Prod (Expr vs)
 
-infixr 5 :<
+type ExprPList vs = Prod (ExprP vs)
+type ExprPET vs a = ExprP vs (EType a)
+type ExprPETList vs ts = ExprPList vs (EType L.<$> ts)
+
+-- type family ExprET vs a where
+--     ExprET vs a = Expr vs (EType a)
+
+-- data HList :: [*] -> * where
+--     HNil :: HList '[]
+--     (:<) :: a -> HList as -> HList (a ': as)
+
+-- infixr 5 :<
+
+-- data ExList :: [*] -> [*] -> * where
+--     ExNil :: ExList vs '[]
+--     (:%)  :: Expr vs t -> ExList vs ts -> ExList vs (a ': ts)
+
+-- data ETExList :: [*] -> [*] -> * where
+--     ETExNil :: ETExList vs '[]
+--     (:$)    :: Expr vs (EType t) -> ExprList vs ts -> ExprList vs (a ': ts)
+
+-- type family ListOf :: (* -> *) -> [*] -> * where
+--     ListOf f []
+
 
 data Expr :: [*] -> * -> * where
     V        :: Indexor vs a     -> Expr vs a
-    O0       :: Op0 a            -> Expr vs a
-    O1       :: Op1 a b          -> Expr vs a -> Expr vs b
-    O2       :: Op2 a b c        -> Expr vs a -> Expr vs b -> Expr vs c
-    O3       :: Op3 a b c d      -> Expr vs a -> Expr vs b -> Expr vs c -> Expr vs d
+    O        :: Op ts as a       -> ExprList vs as -> Expr vs a
     Lambda   :: Expr (a ': vs) b -> Expr vs (a -> b)
+
+data ExprP :: [*] -> * -> * where
+    VP       :: Indexor vs a -> ExprP vs a
+    TP       :: EType a      -> ExprP vs (EType a)
+    EStar    :: ExprP vs (EType a)
+    OP       :: Op ts as a   -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
+    LambdaP  :: ExprPET vs a  -> ExprPET vs b -> ExprP (a ': vs) b -> ExprP vs (a -> b)
 
 type Maybe' = Either ()
 
-data Op0 :: * -> * where
-    I :: Int -> Op0 Int
-    B :: Bool -> Op0 Bool
-    Nil :: Op0 [a]
-    Unit :: Op0 ()
+data Op :: [*] -> [*] -> * -> * where
+    I        :: Int  -> Op '[]  '[] Int
+    B        :: Bool -> Op '[]  '[] Bool
+    Unit     ::         Op '[]  '[] ()
+    Nil      ::         Op '[a] '[] [a]
 
-data Op1 :: * -> * -> * where
-    Abs    :: Op1 Int Int
-    Signum :: Op1 Int Int
-    Not    :: Op1 Bool Bool
-    Left'  :: Op1 a (Either a b)
-    Right' :: Op1 b (Either a b)
-    Fst    :: Op1 (a, b) a
-    Snd    :: Op1 (a, b) b
+    Abs      :: Op '[]     '[Int   ] Int
+    Signum   :: Op '[]     '[Int   ] Int
+    Not      :: Op '[]     '[Bool  ] Bool
+    Left'    :: Op '[a, b] '[a     ] (Either a b)
+    Right'   :: Op '[a, b] '[b     ] (Either a b)
+    Fst      :: Op '[a, b] '[(a, b)] a
+    Snd      :: Op '[a, b] '[(a, b)] b
 
-data Op2 :: * -> * -> * -> * where
-    Plus    :: Op2 Int Int Int
-    Times   :: Op2 Int Int Int
-    Minus   :: Op2 Int Int Int
-    LEquals :: Op2 Int Int Bool
-    And     :: Op2 Bool Bool Bool
-    Or      :: Op2 Bool Bool Bool
-    Tup     :: Op2 a b (a, b)
-    Cons    :: Op2 a [a] [a]
-    Ap      :: Op2 (a -> b) a b
-    Div     :: Op2 Int Int (Maybe' Int)
-    Mod     :: Op2 Int Int (Maybe' Int)
+    Plus     :: Op '[]     '[Int   , Int ] Int
+    Times    :: Op '[]     '[Int   , Int ] Int
+    Minus    :: Op '[]     '[Int   , Int ] Int
+    LEquals  :: Op '[]     '[Int   , Int ] Bool
+    And      :: Op '[]     '[Bool  , Bool] Bool
+    Or       :: Op '[]     '[Bool  , Bool] Bool
+    Tup      :: Op '[a, b] '[a     , b   ] (a, b)
+    Cons     :: Op '[a]    '[a     , [a] ] [a]
+    Ap       :: Op '[a, b] '[a -> b, a   ] b
+    Div      :: Op '[]     '[Int   , Int ] (Maybe' Int)
+    Mod      :: Op '[]     '[Int   , Int ] (Maybe' Int)
 
-data Op3 :: * -> * -> * -> * -> * where
-    If       :: Op3 Bool a a a
-    Case     :: Op3 (Either a b) (a -> c) (b -> c) c
-    UnfoldrN :: Op3 Int (a -> (b, a)) a [b]
-    Foldr    :: Op3 (a -> b -> b) b [a] b
+    If       :: Op '[a]       '[Bool       , a          , a     ] a
+    Case     :: Op '[a, b, c] '[Either a b , a -> c     , b -> c] c
+    UnfoldrN :: Op '[a, b]    '[Int        , a -> (b, a), a     ] [b]
+    Foldr    :: Op '[a, b]    '[a -> b -> b, b          , [a]   ] b
+
+type Op0 ts = Op ts '[]
+type Op1 ts a = Op ts '[a]
+type Op2 ts a b = Op ts '[a, b]
+type Op3 ts a b c = Op ts '[a, b, c]
 
 data EType :: * -> * where
-  EInt :: EType Int
-  EBool :: EType Bool
-  EUnit :: EType ()
+  EInt    :: EType Int
+  EBool   :: EType Bool
+  EUnit   :: EType ()
   EEither :: EType a -> EType b -> EType (Either a b)
-  ETup :: EType a -> EType b -> EType (a, b)
-  EFunc :: EType a -> EType b -> EType (a -> b)
-  EList :: EType a -> EType [a]
+  ETup    :: EType a -> EType b -> EType (a, b)
+  EFunc   :: EType a -> EType b -> EType (a -> b)
+  EList   :: EType a -> EType [a]
 
-data ETList :: [*] -> * where
-    ENil :: ETList '[]
-    (:*) :: EType a -> ETList as -> ETList (a ': as)
+-- data ETList :: [*] -> * where
+    -- ENil :: ETList '[]
+    -- (:*) :: EType a -> ETList as -> ETList (a ': as)
 
-infixr 5 :*
+-- infixr 5 :*
+
+-- -- data ExprW :: * where
+-- --     EW :: EType a -> Expr '[] a -> ExprW
 
 -- data ExprW :: * where
---     EW :: EType a -> Expr '[] a -> ExprW
+    -- EW :: ETList vs -> EType a -> Expr vs a -> ExprW
 
-data ExprW :: * where
-    EW :: ETList vs -> EType a -> Expr vs a -> ExprW
+-- -- data ExprIxW :: * -> * where
+-- --     EIW :: ETList vs -> Expr vs a -> ExprIxW a
 
--- data ExprIxW :: * -> * where
---     EIW :: ETList vs -> Expr vs a -> ExprIxW a
+-- data ExprWIx :: [*] -> * where
+    -- EWI :: EType a -> Expr vs a -> ExprWIx vs
 
-data ExprWIx :: [*] -> * where
-    EWI :: EType a -> Expr vs a -> ExprWIx vs
+-- data ETypeW :: * where
+    -- ETW :: EType a -> ETypeW
 
-data ETypeW :: * where
-    ETW :: EType a -> ETypeW
-
-deriving instance Show (Indexor ks k)
-deriving instance Show (Op0 a)
-deriving instance Show (Op1 a b)
-deriving instance Show (Op2 a b c)
-deriving instance Show (Op3 a b c d)
-deriving instance Show (EType a)
-deriving instance Show (ETList a)
--- deriving instance Show (ExprIxW a)
--- deriving instance Show ExprW'
-deriving instance Show (ExprWIx a)
-deriving instance Show ExprW
-deriving instance Show ETypeW
-deriving instance Eq (Indexor ks k)
-deriving instance Eq (Op0 a)
-deriving instance Eq (Op1 a b)
-deriving instance Eq (Op2 a b c)
-deriving instance Eq (Op3 a b c d)
--- deriving instance Eq (EType a)
--- deriving instance Eq ExprW'
+-- deriving instance Show (Indexor ks k)
+-- deriving instance Show (Op0 a)
+-- deriving instance Show (Op1 a b)
+-- deriving instance Show (Op2 a b c)
+-- deriving instance Show (Op3 a b c d)
+-- deriving instance Show (EType a)
+-- deriving instance Show (ETList a)
+-- -- deriving instance Show (ExprIxW a)
+-- -- deriving instance Show ExprW'
+-- deriving instance Show (ExprWIx a)
+-- deriving instance Show ExprW
+-- deriving instance Show ETypeW
+-- deriving instance Eq (Indexor ks k)
+-- deriving instance Eq (Op0 a)
+-- deriving instance Eq (Op1 a b)
+-- deriving instance Eq (Op2 a b c)
+-- deriving instance Eq (Op3 a b c d)
+-- -- deriving instance Eq (EType a)
+-- -- deriving instance Eq ExprW'
 
 impossible :: String -> a
 impossible [] = error "Impossible branch prevented by type system"
 impossible str = error $ "Impossible branch prevented by type system: " ++ str
 
-class ToExpr a where
-    toExpr :: a -> Expr vs a
+-- class ToExpr a where
+    -- toExpr :: a -> Expr vs a
 
-instance ToExpr Int where
-    toExpr = O0 . I
+-- instance ToExpr Int where
+    -- toExpr = O0 . I
 
-instance ToExpr Bool where
-    toExpr = O0 . B
+-- instance ToExpr Bool where
+    -- toExpr = O0 . B
 
-instance ToExpr () where
-    toExpr _ = O0 Unit
+-- instance ToExpr () where
+    -- toExpr _ = O0 Unit
 
-instance ToExpr a => ToExpr [a] where
-    toExpr []     = O0 Nil
-    toExpr (x:xs) = O2 Cons (toExpr x) (toExpr xs)
+-- instance ToExpr a => ToExpr [a] where
+    -- toExpr []     = O0 Nil
+    -- toExpr (x:xs) = O2 Cons (toExpr x) (toExpr xs)
 
-instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
-    toExpr (x, y) = O2 Tup (toExpr x) (toExpr y)
+-- instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
+    -- toExpr (x, y) = O2 Tup (toExpr x) (toExpr y)
 
-instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
-    toExpr (Left x)  = O1 Left' (toExpr x)
-    toExpr (Right x) = O1 Right' (toExpr x)
+-- instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
+    -- toExpr (Left x)  = O1 Left' (toExpr x)
+    -- toExpr (Right x) = O1 Right' (toExpr x)
 
-class MakeEType a where
-    makeEType :: p a -> EType a
+-- class MakeEType a where
+    -- makeEType :: p a -> EType a
 
-instance MakeEType () where
-    makeEType _ = EUnit
+-- instance MakeEType () where
+    -- makeEType _ = EUnit
 
-instance MakeEType Int where
-    makeEType _ = EInt
+-- instance MakeEType Int where
+    -- makeEType _ = EInt
 
-instance MakeEType Bool where
-    makeEType _ = EBool
+-- instance MakeEType Bool where
+    -- makeEType _ = EBool
 
-instance MakeEType a => MakeEType [a] where
-    makeEType _ = EList (makeEType (Proxy :: Proxy a))
+-- instance MakeEType a => MakeEType [a] where
+    -- makeEType _ = EList (makeEType (Proxy :: Proxy a))
 
-instance (MakeEType a, MakeEType b) => MakeEType (a, b) where
-    makeEType _ = ETup (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+-- instance (MakeEType a, MakeEType b) => MakeEType (a, b) where
+    -- makeEType _ = ETup (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
 
-instance (MakeEType a, MakeEType b) => MakeEType (Either a b) where
-    makeEType _ = EEither (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+-- instance (MakeEType a, MakeEType b) => MakeEType (Either a b) where
+    -- makeEType _ = EEither (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
 
-instance (MakeEType a, MakeEType b) => MakeEType (a -> b) where
-    makeEType _ = EFunc (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
+-- instance (MakeEType a, MakeEType b) => MakeEType (a -> b) where
+    -- makeEType _ = EFunc (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
 
-instance Num (Expr vs Int) where
-    (+)         = O2 Plus
-    (*)         = O2 Times
-    (-)         = O2 Minus
-    abs         = O1 Abs
-    signum      = O1 Signum
-    fromInteger = O0 . I . fromInteger
+-- instance Num (Expr vs Int) where
+    -- (+)         = O2 Plus
+    -- (*)         = O2 Times
+    -- (-)         = O2 Minus
+    -- abs         = O1 Abs
+    -- signum      = O1 Signum
+    -- fromInteger = O0 . I . fromInteger
 
-exprEq :: Expr vs a -> Expr us b -> Bool
-exprEq (V IZ) (V IZ)                           = True
-exprEq (V (IS ix1)) (V (IS ix2))               = exprEq (V ix1) (V ix2)
-exprEq (O0 o1) (O0 o2)                         = op0Eq o1 o2
-exprEq (O1 o1 e1) (O1 o2 e2)                   = op1Eq o1 o2 && exprEq e1 e2
-exprEq (O2 o1 e1 e1') (O2 o2 e2 e2')           = op2Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
-exprEq (O3 o1 e1 e1' e1'') (O3 o2 e2 e2' e2'') = op3Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
-exprEq (Lambda f1) (Lambda f2)                 = exprEq f1 f2
-exprEq _ _                                     = False
+-- exprEq :: Expr vs a -> Expr us b -> Bool
+-- exprEq (V IZ) (V IZ)                           = True
+-- exprEq (V (IS ix1)) (V (IS ix2))               = exprEq (V ix1) (V ix2)
+-- exprEq (O0 o1) (O0 o2)                         = op0Eq o1 o2
+-- exprEq (O1 o1 e1) (O1 o2 e2)                   = op1Eq o1 o2 && exprEq e1 e2
+-- exprEq (O2 o1 e1 e1') (O2 o2 e2 e2')           = op2Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
+-- exprEq (O3 o1 e1 e1' e1'') (O3 o2 e2 e2' e2'') = op3Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
+-- exprEq (Lambda f1) (Lambda f2)                 = exprEq f1 f2
+-- exprEq _ _                                     = False
 
-op0Eq :: Op0 a -> Op0 b -> Bool
-op0Eq (I i1) (I i2) = i1 == i2
-op0Eq (B b1) (B b2) = b1 == b2
-op0Eq Nil    Nil    = True
-op0Eq Unit   Unit   = True
-op0Eq _      _      = False
+-- op0Eq :: Op0 a -> Op0 b -> Bool
+-- op0Eq (I i1) (I i2) = i1 == i2
+-- op0Eq (B b1) (B b2) = b1 == b2
+-- op0Eq Nil    Nil    = True
+-- op0Eq Unit   Unit   = True
+-- op0Eq _      _      = False
 
-op1Eq :: Op1 a b -> Op1 c d -> Bool
-op1Eq Abs Abs       = True
-op1Eq Signum Signum = True
-op1Eq Not Not       = True
-op1Eq Left' Left'   = True
-op1Eq Right' Right' = True
-op1Eq Fst Fst       = True
-op1Eq Snd Snd       = True
-op1Eq _   _         = False
+-- op1Eq :: Op1 a b -> Op1 c d -> Bool
+-- op1Eq Abs Abs       = True
+-- op1Eq Signum Signum = True
+-- op1Eq Not Not       = True
+-- op1Eq Left' Left'   = True
+-- op1Eq Right' Right' = True
+-- op1Eq Fst Fst       = True
+-- op1Eq Snd Snd       = True
+-- op1Eq _   _         = False
 
-op2Eq :: Op2 a b c -> Op2 d e f -> Bool
-op2Eq Plus Plus       = True
-op2Eq Times Times     = True
-op2Eq Minus Minus     = True
-op2Eq LEquals LEquals = True
-op2Eq And And         = True
-op2Eq Or Or           = True
-op2Eq Tup Tup         = True
-op2Eq Cons Cons       = True
-op2Eq Ap Ap           = True
-op2Eq Div Div         = True
-op2Eq Mod Mod         = True
-op2Eq _ _             = False
+-- op2Eq :: Op2 a b c -> Op2 d e f -> Bool
+-- op2Eq Plus Plus       = True
+-- op2Eq Times Times     = True
+-- op2Eq Minus Minus     = True
+-- op2Eq LEquals LEquals = True
+-- op2Eq And And         = True
+-- op2Eq Or Or           = True
+-- op2Eq Tup Tup         = True
+-- op2Eq Cons Cons       = True
+-- op2Eq Ap Ap           = True
+-- op2Eq Div Div         = True
+-- op2Eq Mod Mod         = True
+-- op2Eq _ _             = False
 
-op3Eq :: Op3 a b c d -> Op3 e f g h -> Bool
-op3Eq If If             = True
-op3Eq Case Case         = True
-op3Eq UnfoldrN UnfoldrN = True
-op3Eq Foldr Foldr       = True
-op3Eq _ _               = False
+-- op3Eq :: Op3 a b c d -> Op3 e f g h -> Bool
+-- op3Eq If If             = True
+-- op3Eq Case Case         = True
+-- op3Eq UnfoldrN UnfoldrN = True
+-- op3Eq Foldr Foldr       = True
+-- op3Eq _ _               = False
 
-instance Eq (Expr vs a) where
-    (==) = exprEq
+-- instance Eq (Expr vs a) where
+    -- (==) = exprEq
 
-instance Eq (HList '[]) where
-    HNil == HNil = True
+-- instance Eq (HList '[]) where
+    -- HNil == HNil = True
 
-instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
-    (x :< xs) == (y :< ys) = x == y && xs == ys
+-- instance (Eq a, Eq (HList as)) => Eq (HList (a ': as)) where
+    -- (x :< xs) == (y :< ys) = x == y && xs == ys
 
-eTypeEq :: EType a -> EType b -> Bool
-eTypeEq a b = case compareEType a b of
-                EQ -> True
-                _  -> False
+-- eTypeEq :: EType a -> EType b -> Bool
+-- eTypeEq a b = case compareEType a b of
+    --             EQ -> True
+    --             _  -> False
 
-instance Eq (EType a) where
-    (==) = eTypeEq
+-- instance Eq (EType a) where
+    -- (==) = eTypeEq
 
-instance Show (Expr vs a) where
-    showsPrec p e = showParen (p > 10) $ case e of
-                      V ix -> showString "V "
-                            . showsPrec 11 ix
-                      O0 o -> showString "O0 "
-                            . showsPrec 11 o
-                      O1 o e1 -> showString "O1 "
-                               . showsPrec 11 o
-                               . showString " "
-                               . showsPrec 11 e1
-                      O2 o e1 e2 -> showString "O2 "
-                                  . showsPrec 11 o
-                                  . showString " "
-                                  . showsPrec 11 e1
-                                  . showString " "
-                                  . showsPrec 11 e2
-                      O3 o e1 e2 e3 -> showString "O3 "
-                                     . showsPrec 11 o
-                                     . showString " "
-                                     . showsPrec 11 e1
-                                     . showString " "
-                                     . showsPrec 11 e2
-                                     . showString " "
-                                     . showsPrec 11 e3
-                      Lambda ef -> showString "Lambda "
-                                 . showsPrec 11 ef
+-- instance Show (Expr vs a) where
+    -- showsPrec p e = showParen (p > 10) $ case e of
+    --                   V ix -> showString "V "
+    --                         . showsPrec 11 ix
+    --                   O0 o -> showString "O0 "
+    --                         . showsPrec 11 o
+    --                   O1 o e1 -> showString "O1 "
+    --                            . showsPrec 11 o
+    --                            . showString " "
+    --                            . showsPrec 11 e1
+    --                   O2 o e1 e2 -> showString "O2 "
+    --                               . showsPrec 11 o
+    --                               . showString " "
+    --                               . showsPrec 11 e1
+    --                               . showString " "
+    --                               . showsPrec 11 e2
+    --                   O3 o e1 e2 e3 -> showString "O3 "
+    --                                  . showsPrec 11 o
+    --                                  . showString " "
+    --                                  . showsPrec 11 e1
+    --                                  . showString " "
+    --                                  . showsPrec 11 e2
+    --                                  . showString " "
+    --                                  . showsPrec 11 e3
+    --                   Lambda ef -> showString "Lambda "
+    --                              . showsPrec 11 ef
 
-instance Show (HList '[]) where
-    showsPrec _ HNil = showString "HNil"
+-- instance Show (HList '[]) where
+    -- showsPrec _ HNil = showString "HNil"
 
-instance (Show a, Show (HList as)) => Show (HList (a ': as)) where
-    showsPrec p (x :< xs) = showParen (p > 5) $ showsPrec 6 x
-                                              . showString " :< "
-                                              . showsPrec 5 xs
+-- instance (Show a, Show (HList as)) => Show (HList (a ': as)) where
+    -- showsPrec p (x :< xs) = showParen (p > 5) $ showsPrec 6 x
+    --                                           . showString " :< "
+    --                                           . showsPrec 5 xs
 
-compareEType :: EType a -> EType b -> Ordering
+-- compareEType :: EType a -> EType b -> Ordering
 
-compareEType EUnit         EUnit         = EQ
-compareEType EUnit         _             = LT
-compareEType _             EUnit         = GT
-compareEType EBool         EBool         = EQ
-compareEType EBool         _             = LT
-compareEType _             EBool         = GT
-compareEType EInt          EInt          = EQ
-compareEType EInt          _             = LT
-compareEType _             EInt          = GT
-compareEType (EEither a b) (EEither c d) = compareEType a b <> compareEType c d
-compareEType (EEither _ _) _             = LT
-compareEType _             (EEither _ _) = GT
-compareEType (ETup a b)    (ETup c d)    = compareEType a b <> compareEType c d
-compareEType (ETup _ _)    _             = LT
-compareEType _             (ETup _ _)    = GT
-compareEType (EFunc a b)   (EFunc c d)   = compareEType a b <> compareEType c d
-compareEType (EFunc _ _)   _             = LT
-compareEType _             (EFunc _ _)   = GT
-compareEType (EList a)     (EList b)     = compareEType a b
+-- compareEType EUnit         EUnit         = EQ
+-- compareEType EUnit         _             = LT
+-- compareEType _             EUnit         = GT
+-- compareEType EBool         EBool         = EQ
+-- compareEType EBool         _             = LT
+-- compareEType _             EBool         = GT
+-- compareEType EInt          EInt          = EQ
+-- compareEType EInt          _             = LT
+-- compareEType _             EInt          = GT
+-- compareEType (EEither a b) (EEither c d) = compareEType a b <> compareEType c d
+-- compareEType (EEither _ _) _             = LT
+-- compareEType _             (EEither _ _) = GT
+-- compareEType (ETup a b)    (ETup c d)    = compareEType a b <> compareEType c d
+-- compareEType (ETup _ _)    _             = LT
+-- compareEType _             (ETup _ _)    = GT
+-- compareEType (EFunc a b)   (EFunc c d)   = compareEType a b <> compareEType c d
+-- compareEType (EFunc _ _)   _             = LT
+-- compareEType _             (EFunc _ _)   = GT
+-- compareEType (EList a)     (EList b)     = compareEType a b
 
-instance Ord (EType a) where
-    compare = compareEType
+-- instance Ord (EType a) where
+    -- compare = compareEType
 
-instance IsTy EType where
-    tyEq EUnit EUnit = Just Refl
-    tyEq EBool EBool = Just Refl
-    tyEq EInt EInt = Just Refl
-    tyEq (EList t1) (EList t2) = case tyEq t1 t2 of
-                                   Just Refl -> Just Refl
-                                   _ -> Nothing
-    tyEq (ETup t1 t1') (ETup t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
-                                         Just (Refl, Refl) -> Just Refl
-                                         _ -> Nothing
-    tyEq (EEither t1 t1') (EEither t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
-                                               Just (Refl, Refl) -> Just Refl
-                                               _ -> Nothing
-    tyEq (EFunc t1 t1') (EFunc t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
-                                           Just (Refl, Refl) -> Just Refl
-                                           _ -> Nothing
-    tyEq _ _ = Nothing
+-- instance IsTy EType where
+    -- tyEq EUnit EUnit = Just Refl
+    -- tyEq EBool EBool = Just Refl
+    -- tyEq EInt EInt = Just Refl
+    -- tyEq (EList t1) (EList t2) = case tyEq t1 t2 of
+    --                                Just Refl -> Just Refl
+    --                                _ -> Nothing
+    -- tyEq (ETup t1 t1') (ETup t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+    --                                      Just (Refl, Refl) -> Just Refl
+    --                                      _ -> Nothing
+    -- tyEq (EEither t1 t1') (EEither t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+    --                                            Just (Refl, Refl) -> Just Refl
+    --                                            _ -> Nothing
+    -- tyEq (EFunc t1 t1') (EFunc t2 t2') = case liftA2 (,) (tyEq t1 t2) (tyEq t1' t2') of
+    --                                        Just (Refl, Refl) -> Just Refl
+    --                                        _ -> Nothing
+    -- tyEq _ _ = Nothing
 
 
--- eTypeSize :: EType a -> Int -> Int
--- eTypeSize t = case t of
---                 EUnit -> 0 ~~> 1
---                 EBool -> 0 ~~> 2
---                 EInt  -> 1 ~~> 1
---                 EEither a b -> (+) <$> eTypeSize a <*> eTypeSize b
---                 ETup a b -> \i -> sum . map (\j -> eTypeSize b j * eTypeSize a (i - j)) $ [0..i]
---                 EList a -> eTypeSize a . subtract 1
---   where
---     (~~>) :: Int -> Int -> Int -> Int
---     (i ~~> x) j | j == i    = x
---                 | otherwise = 0
+-- -- eTypeSize :: EType a -> Int -> Int
+-- -- eTypeSize t = case t of
+-- --                 EUnit -> 0 ~~> 1
+-- --                 EBool -> 0 ~~> 2
+-- --                 EInt  -> 1 ~~> 1
+-- --                 EEither a b -> (+) <$> eTypeSize a <*> eTypeSize b
+-- --                 ETup a b -> \i -> sum . map (\j -> eTypeSize b j * eTypeSize a (i - j)) $ [0..i]
+-- --                 EList a -> eTypeSize a . subtract 1
+-- --   where
+-- --     (~~>) :: Int -> Int -> Int -> Int
+-- --     (i ~~> x) j | j == i    = x
+-- --                 | otherwise = 0
 
-exprLeafCount :: Expr vs a -> Int
-exprLeafCount e = case e of
-                    V _ -> 1
-                    O0 _ -> 1
-                    O1 _ e1 -> exprLeafCount e1
-                    O2 _ e1 e2 -> exprLeafCount e1 + exprLeafCount e2
-                    O3 _ e1 e2 e3 -> exprLeafCount e1 + exprLeafCount e2 + exprLeafCount e3
-                    Lambda ef -> exprLeafCount ef
+-- exprLeafCount :: Expr vs a -> Int
+-- exprLeafCount e = case e of
+    --                 V _ -> 1
+    --                 O0 _ -> 1
+    --                 O1 _ e1 -> exprLeafCount e1
+    --                 O2 _ e1 e2 -> exprLeafCount e1 + exprLeafCount e2
+    --                 O3 _ e1 e2 e3 -> exprLeafCount e1 + exprLeafCount e2 + exprLeafCount e3
+    --                 Lambda ef -> exprLeafCount ef
 
-exprLeafDepths :: Expr vs a -> [Int]
-exprLeafDepths e = go 0 e []
-  where
-    go :: Int -> Expr vs a -> [Int] -> [Int]
-    go n e' = case e' of
-                V _ -> (n:)
-                O0 _ -> (n:)
-                O1 _ e1 -> go (n + 1) e1
-                O2 _ e1 e2 -> go (n + 1) e1 . go (n + 1) e2
-                O3 _ e1 e2 e3 -> go (n + 1) e1 . go (n + 1) e2 . go (n + 1) e3
-                Lambda ef -> go (n + 1) ef
+-- exprLeafDepths :: Expr vs a -> [Int]
+-- exprLeafDepths e = go 0 e []
+  -- where
+    -- go :: Int -> Expr vs a -> [Int] -> [Int]
+    -- go n e' = case e' of
+    --             V _ -> (n:)
+    --             O0 _ -> (n:)
+    --             O1 _ e1 -> go (n + 1) e1
+    --             O2 _ e1 e2 -> go (n + 1) e1 . go (n + 1) e2
+    --             O3 _ e1 e2 e3 -> go (n + 1) e1 . go (n + 1) e2 . go (n + 1) e3
+    --             Lambda ef -> go (n + 1) ef
+
+
+curry'1 :: (Prod f '[a] -> c) -> f a -> c
+curry'1 f x = f (x :< Ø)
+
+curry'2 :: (Prod f '[a,b] -> c) -> f a -> f b -> c
+curry'2 f x y = f (x :< y :< Ø)
+
+curry'3 :: (Prod f '[a,b,c] -> d) -> f a -> f b -> f c -> d
+curry'3 f x y z = f (x :< y :< z :< Ø)
+
+uncurry'1 :: (f a -> f c) -> Prod f '[a] -> f c
+uncurry'1 f (x :< Ø) = f x
+
+uncurry'2 :: (f a -> f b -> f c) -> Prod f '[a, b] -> f c
+uncurry'2 f (x :< y :< Ø) = f x y
+
+uncurry'3 :: (f a -> f b -> f c -> f d) -> Prod f '[a, b, c] -> f d
+uncurry'3 f (x :< y :< z :< Ø) = f x y z
+
+
+-- curryProd3 :: (Prod f '[a,b,c] -> c) -> f a -> f b -> c
+-- curryProd3 f x y = f (x :< y :< Ø)
+
+o0 :: Op0 ts a -> Expr vs a
+o0 = flip O Ø
+
+o1 :: Op1 ts a b -> Expr vs a -> Expr vs b
+o1 o = curry'1 (O o)
+
+o2 :: Op2 ts a b c -> Expr vs a -> Expr vs b -> Expr vs c
+o2 o = curry'2 (O o)
+
+o3 :: Op3 ts a b c d -> Expr vs a -> Expr vs b -> Expr vs c -> Expr vs d
+o3 o = curry'3 (O o)
+
 
 infixl 1 ~$
+
 (~$) :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
-(~$) = O2 Ap
+(~$) = o2 Ap
 
 foldr' :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
-foldr' = O3 Foldr
+foldr' = o3 Foldr
 
 case' :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
-case' = O3 Case
+case' = o3 Case
 
 unfoldrN' :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
-unfoldrN' = O3 UnfoldrN
+unfoldrN' = o3 UnfoldrN
 
 if' :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
-if' = O3 If
+if' = o3 If
 
 right' :: Expr vs b -> Expr vs (Either a b)
-right' = O1 Right'
+right' = o1 Right'
 
 left' :: Expr vs a -> Expr vs (Either a b)
-left' = O1 Left'
+left' = o1 Left'
 
 just' :: Expr vs b -> Expr vs (Maybe' b)
 just' = right'
@@ -388,25 +456,25 @@ nothing' :: Expr vs (Maybe' b)
 nothing' = left' unit'
 
 tup' :: Expr vs a -> Expr vs b -> Expr vs (a, b)
-tup' = O2 Tup
+tup' = o2 Tup
 
 fst' :: Expr vs (a, b) -> Expr vs a
-fst' = O1 Fst
+fst' = o1 Fst
 
 snd' :: Expr vs (a, b) -> Expr vs b
-snd' = O1 Snd
+snd' = o1 Snd
 
 infixr 3 ~&&
 (~&&) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
-(~&&) = O2 And
+(~&&) = o2 And
 
 infixr 2 ~||
 (~||) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
-(~||) = O2 Or
+(~||) = o2 Or
 
 infix 4 ~<=
 (~<=) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
-(~<=) = O2 LEquals
+(~<=) = o2 LEquals
 
 infix 4 ~==
 (~==) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
@@ -425,40 +493,40 @@ infix 4 ~>=
 e1 ~>= e2 = e2 ~<= e1
 
 not' :: Expr vs Bool -> Expr vs Bool
-not' = O1 Not
+not' = o1 Not
 
 xor' :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
 xor' e1 e2 = (e1 ~|| e2) ~&& not' (e1 ~&& e2)
 
 infixl 7 `mod'`
 mod' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-mod' = O2 Mod
+mod' = o2 Mod
 
 infixl 7 `div'`
 div' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-div' = O2 Div
+div' = o2 Div
 
 infixr 5 ~:
 (~:) :: Expr vs a -> Expr vs [a] -> Expr vs [a]
-(~:) = O2 Cons
+(~:) = o2 Cons
 
 unit' :: Expr vs ()
-unit' = O0 Unit
+unit' = o0 Unit
 
 nil' :: Expr vs [a]
-nil' = O0 Nil
+nil' = o0 Nil
 
 false' :: Expr vs Bool
-false' = O0 (B False)
+false' = o0 (B False)
 
 true' :: Expr vs Bool
-true' = O0 (B True)
+true' = o0 (B True)
 
 iI :: Int -> Expr vs Int
-iI = O0 . I
+iI = o0 . I
 
 bB :: Bool -> Expr vs Bool
-bB = O0 . B
+bB = o0 . B
 
 λ :: Expr (a ': vs) b -> Expr vs (a -> b)
 λ = Lambda
@@ -467,66 +535,66 @@ infixr 0 .->
 (.->) :: (Expr (a ': vs) b -> Expr vs (a -> b)) -> Expr (a ': vs) b -> Expr vs (a -> b)
 (.->) = ($)
 
-isEEither :: EType a -> Bool
-isEEither (EEither _ _) = True
-isEEither _ = False
+-- isEEither :: EType a -> Bool
+-- isEEither (EEither _ _) = True
+-- isEEither _ = False
 
-isEFunc :: EType a -> Bool
-isEFunc (EFunc _ _) = True
-isEFunc _ = False
+-- isEFunc :: EType a -> Bool
+-- isEFunc (EFunc _ _) = True
+-- isEFunc _ = False
 
-isCompoundType :: EType a -> Bool
-isCompoundType (EEither _ _) = True
-isCompoundType (ETup _ _) = True
-isCompoundType (EFunc _ _) = True
-isCompoundType (EList _) = True
-isCompoundType _ = False
+-- isCompoundType :: EType a -> Bool
+-- isCompoundType (EEither _ _) = True
+-- isCompoundType (ETup _ _) = True
+-- isCompoundType (EFunc _ _) = True
+-- isCompoundType (EList _) = True
+-- isCompoundType _ = False
 
-eTypeLeaves :: EType a -> Int
-eTypeLeaves EInt = 1
-eTypeLeaves EBool = 1
-eTypeLeaves EUnit = 1
-eTypeLeaves (EList x) = eTypeLeaves x
-eTypeLeaves (EEither x y) = eTypeLeaves x + eTypeLeaves y
-eTypeLeaves (ETup x y) = eTypeLeaves x + eTypeLeaves y
-eTypeLeaves (EFunc x y) = eTypeLeaves x + eTypeLeaves y
+-- eTypeLeaves :: EType a -> Int
+-- eTypeLeaves EInt = 1
+-- eTypeLeaves EBool = 1
+-- eTypeLeaves EUnit = 1
+-- eTypeLeaves (EList x) = eTypeLeaves x
+-- eTypeLeaves (EEither x y) = eTypeLeaves x + eTypeLeaves y
+-- eTypeLeaves (ETup x y) = eTypeLeaves x + eTypeLeaves y
+-- eTypeLeaves (EFunc x y) = eTypeLeaves x + eTypeLeaves y
 
-eTypeNodes :: EType a -> Int
-eTypeNodes EInt = 1
-eTypeNodes EBool = 1
-eTypeNodes EUnit = 1
-eTypeNodes (EList x) = 1 + eTypeLeaves x
-eTypeNodes (EEither x y) = 1 + eTypeLeaves x + eTypeLeaves y
-eTypeNodes (ETup x y) = 1 + eTypeLeaves x + eTypeLeaves y
-eTypeNodes (EFunc x y) = 1 + eTypeLeaves x + eTypeLeaves y
+-- eTypeNodes :: EType a -> Int
+-- eTypeNodes EInt = 1
+-- eTypeNodes EBool = 1
+-- eTypeNodes EUnit = 1
+-- eTypeNodes (EList x) = 1 + eTypeLeaves x
+-- eTypeNodes (EEither x y) = 1 + eTypeLeaves x + eTypeLeaves y
+-- eTypeNodes (ETup x y) = 1 + eTypeLeaves x + eTypeLeaves y
+-- eTypeNodes (EFunc x y) = 1 + eTypeLeaves x + eTypeLeaves y
 
-eTypeDepth :: EType a -> Int
-eTypeDepth EInt = 0
-eTypeDepth EBool = 1
-eTypeDepth EUnit = 0
-eTypeDepth (EList x) = 1 + eTypeDepth x
-eTypeDepth (EEither x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
-eTypeDepth (ETup x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
-eTypeDepth (EFunc x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+-- eTypeDepth :: EType a -> Int
+-- eTypeDepth EInt = 0
+-- eTypeDepth EBool = 1
+-- eTypeDepth EUnit = 0
+-- eTypeDepth (EList x) = 1 + eTypeDepth x
+-- eTypeDepth (EEither x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+-- eTypeDepth (ETup x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
+-- eTypeDepth (EFunc x y) = 1 + max (eTypeDepth x) (eTypeDepth y)
 
-absurdIxor :: Indexor '[] a -> b
-absurdIxor ix = ix `seq` let x = x in x
+-- absurdIxor :: Indexor '[] a -> b
+-- absurdIxor ix = ix `seq` let x = x in x
 
-indexorLength :: Indexor vs a -> Int
-indexorLength IZ = 0
-indexorLength (IS ix) = 1 + indexorLength ix
+-- indexorLength :: Indexor vs a -> Int
+-- indexorLength IZ = 0
+-- indexorLength (IS ix) = 1 + indexorLength ix
 
-enumTypes :: [ETypeW]
-enumTypes = concatMap enumTypesD [0..]
+-- enumTypes :: [ETypeW]
+-- enumTypes = concatMap enumTypesD [0..]
 
-enumTypesD :: Int -> [ETypeW]
-enumTypesD n | n <= 0 = [ETW EInt, ETW EBool, ETW EUnit]
-             | otherwise = mkList ++ mkOthers
-  where
-    mkList = do
-      ETW t1 <- enumTypesD (n - 1)
-      return $ ETW (EList t1)
-    mkOthers = do
-      ETW t1 <- enumTypesD (n - 1)
-      ETW t2 <- enumTypesD (n - 1)
-      [ETW (EEither t1 t2), ETW (ETup t1 t2), ETW (EFunc t1 t2)]
+-- enumTypesD :: Int -> [ETypeW]
+-- enumTypesD n | n <= 0 = [ETW EInt, ETW EBool, ETW EUnit]
+    --          | otherwise = mkList ++ mkOthers
+  -- where
+    -- mkList = do
+    --   ETW t1 <- enumTypesD (n - 1)
+    --   return $ ETW (EList t1)
+    -- mkOthers = do
+    --   ETW t1 <- enumTypesD (n - 1)
+    --   ETW t2 <- enumTypesD (n - 1)
+    --   [ETW (EEither t1 t2), ETW (ETup t1 t2), ETW (EFunc t1 t2)]

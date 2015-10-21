@@ -11,14 +11,18 @@ module Data.ExprGADT.Eval where
 
 import Data.ExprGADT.Traversals
 import Data.Functor.Identity
+import Data.Type.Product
+import Type.Class.HFunctor
+import Data.Type.HList
 import Data.ExprGADT.Types
 import Data.List (unfoldr)
 
 forbidden :: Expr vs a -> String -> b
-forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
+-- forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
+forbidden e r = error $ "Impossible branch prevented by type system! " ++ r
 
 eval :: Expr '[] a -> a
-eval = evalWith HNil
+eval = evalWith Ø
 
 evalWith :: forall vs a. HList vs -> Expr vs a -> a
 evalWith vs = go
@@ -26,128 +30,124 @@ evalWith vs = go
     go :: forall b. Expr vs b -> b
     go e = case e of
              V ix                -> subIndexor vs ix
-             O0 o                -> op0 o
-             O1 o e1             -> op1 o (go e1)
-             O2 o e1 e2          -> op2 o (go e1) (go e2)
-             O3 o e1 e2 e3       -> op3 o (go e1) (go e2) (go e3)
-             Lambda ef           -> \x -> evalWith (x :< vs) ef
+             O o es              -> op o (map' (Identity . go) es)
+             Lambda ef           -> \x -> evalWith (x :<- vs) ef
 
-evalWith' :: forall vs a. (forall b. Indexor vs b -> b) -> Expr vs a -> a
+evalWith' :: forall vs a.
+             (forall b. Indexor vs b -> b)
+          -> Expr vs a -> a
 evalWith' f = go
   where
     go :: forall b. Expr vs b -> b
     go e = case e of
-             V ix                -> f ix
-             O0 o                -> op0 o
-             O1 o e1             -> op1 o (go e1)
-             O2 o e1 e2          -> op2 o (go e1) (go e2)
-             O3 o e1 e2 e3       -> op3 o (go e1) (go e2) (go e3)
-             Lambda ef           -> \x -> evalWith' (f' x) ef
+             V ix      -> f ix
+             O o es    -> op o (map' (Identity . go) es)
+             Lambda ef -> \x -> evalWith' (f' x) ef
     f' :: forall b v. v -> Indexor (v ': vs) b -> b
     f' x IZ      = x
     f' _ (IS ix) = f ix
 
-subIndexor :: forall ks. HList ks -> (forall v. Indexor ks v -> v)
-subIndexor (x :< _ ) IZ      = x
+subIndexor :: HList ks -> (forall v. Indexor ks v -> v)
+subIndexor (x :< _ ) IZ      = runIdentity x
 subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
-subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
+-- subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
 
-reduceAll :: Expr vs a -> Expr vs a
-reduceAll e | e == e'   = e'
-            | otherwise = reduceAll e'
-  where
-    Identity e' = traverseExprPrePostM (Identity . collapse) e
+-- reduceAll :: Expr vs a -> Expr vs a
+-- reduceAll e | e == e'   = e'
+--             | otherwise = reduceAll e'
+--   where
+--     Identity e' = traverseExprPrePostM (Identity . collapse) e
 
-collapse :: Expr vs a -> Expr vs a
-collapse e = case e of
-               V ix -> V ix
-               O0 o -> O0 o
-               O1 o e1 -> case o of
-                            Fst    -> case e1 of
-                                        O2 Tup ex _ -> ex
-                                        _           -> e
-                            Snd    -> case e1 of
-                                        O2 Tup _ ey -> ey
-                                        _           -> e
-                            o'     -> case e1 of
-                                        O0 o'' -> case op1_ o' (op0 o'') of
-                                                    Just x -> O0 x
-                                                    _      -> O1 o e1
-                                        _      -> O1 o e1
-               O2 o e1 e2 -> case o of
-                               Mod -> collapseModDiv Mod e1 e2
-                               Div -> collapseModDiv Div e1 e2
-                               Ap  -> collapseAp e1 e2
-                               o'  -> case (e1, e2) of
-                                        (O0 o''1, O0 o''2) ->
-                                          case op2_ o' (op0 o''1) (op0 o''2) of
-                                            Just x -> O0 x
-                                            _      -> O2 o e1 e2
-                                        _   -> e
-               O3 o e1 e2 e3 -> case o of
-                                  If       -> collapseIf e1 e2 e3
-                                  Case     -> collapseCase e1 e2 e3
-                                  UnfoldrN -> collapseUnfoldrN e1 e2 e3
-                                  Foldr    -> collapseFoldr e1 e2 e3
-               Lambda eλ -> Lambda eλ
-  where
-    collapseModDiv :: Op2 Int Int (Maybe' Int) -> Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-    collapseModDiv o2 ex ey = case (ex, ey) of
-                              (O0 (I x), O0 (I y)) -> case op2 o2 x y of
-                                                        Left () -> O1 Left' (O0 Unit)
-                                                        Right z -> O1 Right' (O0 (I z))
-                              _                    -> O2 o2 ex ey
-    collapseAp :: forall vs a b. Expr vs (a -> b) -> Expr vs a -> Expr vs b
-    collapseAp ef ex = case ef of
-                         Lambda eλ -> subVariables apply eλ
-                         _         -> ef ~$ ex
-      where
-        apply :: forall c. Indexor (a ': vs) c -> Expr vs c
-        apply IZ      = ex
-        apply (IS ix) = V ix
-    collapseIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
-    collapseIf eb ex ey = case eb of
-                            O0 (B b) | b         -> ex
-                                     | otherwise -> ey
-                            _                    -> if' eb ex ey
-    collapseCase :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
-    collapseCase ee el er = case ee of
-                              O1 Left' ex  -> el ~$ ex
-                              O1 Right' ex -> er ~$ ex
-                              _                  -> case' ee el er
-    collapseUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
-    collapseUnfoldrN en ef ez = case en of
-                                O0 (I i) | i <= 0    -> nil'
-                                         | otherwise -> unfold (i - 1)
-                                _                    -> unfoldrN' en ef ez
-      where
-        unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
-                                                   (overIxors IS ef)
-                                                   (snd' (V IZ))
-                   ) ~$ (ef ~$ ez)
-    collapseFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
-    collapseFoldr ef ez exs = case exs of
-                                O0 Nil         -> ez
-                                O2 Cons ey eys -> ef ~$ ey ~$ foldr' ef ez eys
-                                _              -> foldr' ef ez exs
+-- collapse :: Expr vs a -> Expr vs a
+-- collapse e = case e of
+--                V ix -> V ix
+--                O0 o -> O0 o
+--                O1 o e1 -> case o of
+--                             Fst    -> case e1 of
+--                                         O2 Tup ex _ -> ex
+--                                         _           -> e
+--                             Snd    -> case e1 of
+--                                         O2 Tup _ ey -> ey
+--                                         _           -> e
+--                             o'     -> case e1 of
+--                                         O0 o'' -> case op1_ o' (op0 o'') of
+--                                                     Just x -> O0 x
+--                                                     _      -> O1 o e1
+--                                         _      -> O1 o e1
+--                O2 o e1 e2 -> case o of
+--                                Mod -> collapseModDiv Mod e1 e2
+--                                Div -> collapseModDiv Div e1 e2
+--                                Ap  -> collapseAp e1 e2
+--                                o'  -> case (e1, e2) of
+--                                         (O0 o''1, O0 o''2) ->
+--                                           case op2_ o' (op0 o''1) (op0 o''2) of
+--                                             Just x -> O0 x
+--                                             _      -> O2 o e1 e2
+--                                         _   -> e
+--                O3 o e1 e2 e3 -> case o of
+--                                   If       -> collapseIf e1 e2 e3
+--                                   Case     -> collapseCase e1 e2 e3
+--                                   UnfoldrN -> collapseUnfoldrN e1 e2 e3
+--                                   Foldr    -> collapseFoldr e1 e2 e3
+--                Lambda eλ -> Lambda eλ
+--   where
+--     collapseModDiv :: Op2 Int Int (Maybe' Int) -> Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
+--     collapseModDiv o2 ex ey = case (ex, ey) of
+--                               (O0 (I x), O0 (I y)) -> case op2 o2 x y of
+--                                                         Left () -> O1 Left' (O0 Unit)
+--                                                         Right z -> O1 Right' (O0 (I z))
+--                               _                    -> O2 o2 ex ey
+--     collapseAp :: forall vs a b. Expr vs (a -> b) -> Expr vs a -> Expr vs b
+--     collapseAp ef ex = case ef of
+--                          Lambda eλ -> subVariables apply eλ
+--                          _         -> ef ~$ ex
+--       where
+--         apply :: forall c. Indexor (a ': vs) c -> Expr vs c
+--         apply IZ      = ex
+--         apply (IS ix) = V ix
+--     collapseIf :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
+--     collapseIf eb ex ey = case eb of
+--                             O0 (B b) | b         -> ex
+--                                      | otherwise -> ey
+--                             _                    -> if' eb ex ey
+--     collapseCase :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
+--     collapseCase ee el er = case ee of
+--                               O1 Left' ex  -> el ~$ ex
+--                               O1 Right' ex -> er ~$ ex
+--                               _                  -> case' ee el er
+--     collapseUnfoldrN :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
+--     collapseUnfoldrN en ef ez = case en of
+--                                 O0 (I i) | i <= 0    -> nil'
+--                                          | otherwise -> unfold (i - 1)
+--                                 _                    -> unfoldrN' en ef ez
+--       where
+--         unfold i = (λ .-> fst' (V IZ) ~: unfoldrN' (iI i)
+--                                                    (overIxors IS ef)
+--                                                    (snd' (V IZ))
+--                    ) ~$ (ef ~$ ez)
+--     collapseFoldr :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
+--     collapseFoldr ef ez exs = case exs of
+--                                 O0 Nil         -> ez
+--                                 O2 Cons ey eys -> ef ~$ ey ~$ foldr' ef ez eys
+--                                 _              -> foldr' ef ez exs
 
-subVariables :: forall vs us a. (forall b. Indexor vs b -> Expr us b) -> Expr vs a -> Expr us a
-subVariables f = runIdentity . subVariablesA (Identity . f)
+-- subVariables :: forall vs us a. (forall b. Indexor vs b -> Expr us b) -> Expr vs a -> Expr us a
+-- subVariables f = runIdentity . subVariablesA (Identity . f)
 
-subVariablesA :: forall vs us f a. Applicative f => (forall b. Indexor vs b -> f (Expr us b)) -> Expr vs a -> f (Expr us a)
-subVariablesA f = go
-  where
-    go :: forall b. Expr vs b -> f (Expr us b)
-    go e = case e of
-             V ix          -> f ix
-             O0 o          -> pure $ O0 o
-             O1 o e1       -> O1 o <$> go e1
-             O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
-             O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
-             Lambda eλ     -> Lambda <$> subVariablesA f' eλ
-    f' :: forall b c. Indexor (c ': vs) b -> f (Expr (c ': us) b)
-    f' IZ      = pure $ V IZ
-    f' (IS ix) = subVariables (V . IS) <$> f ix
+-- subVariablesA :: forall vs us f a. Applicative f => (forall b. Indexor vs b -> f (Expr us b)) -> Expr vs a -> f (Expr us a)
+-- subVariablesA f = go
+--   where
+--     go :: forall b. Expr vs b -> f (Expr us b)
+--     go e = case e of
+--              V ix          -> f ix
+--              O0 o          -> pure $ O0 o
+--              O1 o e1       -> O1 o <$> go e1
+--              O2 o e1 e2    -> O2 o <$> go e1 <*> go e2
+--              O3 o e1 e2 e3 -> O3 o <$> go e1 <*> go e2 <*> go e3
+--              Lambda eλ     -> Lambda <$> subVariablesA f' eλ
+--     f' :: forall b c. Indexor (c ': vs) b -> f (Expr (c ': us) b)
+--     f' IZ      = pure $ V IZ
+--     f' (IS ix) = subVariables (V . IS) <$> f ix
 
 -- will this be good enough for monomorphic cases?
 -- might have to resort to doing something with Proxy and letting people
@@ -156,14 +156,14 @@ subVariablesA f = go
 -- looks like it defers to "push as much as possible", which maybe or maybe
 -- not be the best desire for monomorphic code...
 
-class PushInto vs us where
-    pushInto :: Expr vs a -> Expr us a
+-- class PushInto vs us where
+--     pushInto :: Expr vs a -> Expr us a
 
-instance PushInto vs vs where
-    pushInto = id
+-- instance PushInto vs vs where
+--     pushInto = id
 
-instance PushInto vs us => PushInto vs (v ': us) where
-    pushInto = overIxors IS . pushInto
+-- instance PushInto vs us => PushInto vs (v ': us) where
+--     pushInto = overIxors IS . pushInto
 
 -- gives a pushing function for each layer introduced
 -- doesn't look good because requres $ cause existentials, so can't use .->
@@ -179,69 +179,71 @@ lambda' :: ((forall c. Expr vs c -> Expr (a ': vs) c)
         -> Expr vs (a -> b)
 lambda' = λ'
 
-op0 :: Op0 a -> a
-op0 (I i) = i
-op0 (B b) = b
-op0 Nil   = []
-op0 Unit  = ()
-
-op1 :: Op1 a b -> a -> b
-op1 Abs    = abs
-op1 Signum = signum
-op1 Not    = not
-op1 Left'  = Left
-op1 Right' = Right
-op1 Fst    = fst
-op1 Snd    = snd
-
-op1_ :: Op1 a b -> a -> Maybe (Op0 b)
-op1_ o = modder . op1 o
+op :: Op ts as b -> HList as -> b
+op o xs = case o of
+            I i      -> i
+            B b      -> b
+            Nil      -> []
+            Unit     -> ()
+            Abs      -> overHL1 abs xs
+            Signum   -> overHL1 signum xs
+            Not      -> overHL1 not xs
+            Left'    -> overHL1 Left xs
+            Right'   -> overHL1 Right xs
+            Fst      -> overHL1 fst xs
+            Snd      -> overHL1 snd xs
+            Plus     -> overHL2 (+) xs
+            Times    -> overHL2 (*) xs
+            Minus    -> overHL2 (-) xs
+            LEquals  -> overHL2 (<=) xs
+            And      -> overHL2 (&&) xs
+            Or       -> overHL2 (||) xs
+            Tup      -> overHL2 (,) xs
+            Cons     -> overHL2 (:) xs
+            Ap       -> overHL2 ($) xs
+            Div      -> overHL2 (\x y -> if y == 0 then Left () else Right (x `div` y)) xs
+            Mod      -> overHL2 (\x y -> if y == 0 then Left () else Right (x `mod` y)) xs
+            If       -> overHL3 (\b x y -> if b then x else y) xs
+            Case     -> overHL3 (\e l r -> either l r e) xs
+            UnfoldrN -> overHL3 (\n f z -> take n (unfoldr (Just . f) z)) xs
+            Foldr    -> overHL3 foldr xs
   where
-    modder = case o of
-               Abs    -> Just . I
-               Signum -> Just . I
-               Not    -> Just . B
-               Left'  -> const Nothing
-               Right' -> const Nothing
-               Fst    -> const Nothing
-               Snd    -> const Nothing
+    overHL1 :: forall a b. (a -> b) -> HList '[a] -> b
+    overHL1 f (x :<- Ø) = f x
+    overHL2 :: forall a b c. (a -> b -> c) -> HList '[a, b] -> c
+    overHL2 f (x :<- (y :<- Ø)) = f x y
+    overHL3 :: forall a b c d. (a -> b -> c -> d) -> HList '[a, b, c] -> d
+    overHL3 f (x :<- (y :<- (z :<- Ø))) = f x y z
 
-op2 :: Op2 a b c -> a -> b -> c
-op2 Plus    = (+)
-op2 Times   = (*)
-op2 Minus   = (-)
-op2 LEquals = (<=)
-op2 And     = (&&)
-op2 Or      = (||)
-op2 Tup     = (,)
-op2 Cons    = (:)
-op2 Ap      = ($)
-op2 Div     = \x y -> if y == 0 then Left () else Right (x `div` y)
-op2 Mod     = \x y -> if y == 0 then Left () else Right (x `mod` y)
+-- op1_ :: Op1 a b -> a -> Maybe (Op0 b)
+-- op1_ o = modder . op1 o
+--   where
+--     modder = case o of
+--                Abs    -> Just . I
+--                Signum -> Just . I
+--                Not    -> Just . B
+--                Left'  -> const Nothing
+--                Right' -> const Nothing
+--                Fst    -> const Nothing
+--                Snd    -> const Nothing
 
-op2_ :: Op2 a b c -> a -> b -> Maybe (Op0 c)
-op2_ o x y = modder (op2 o x y)
-  where
-    modder = case o of
-               Plus    -> Just . I
-               Times   -> Just . I
-               Minus   -> Just . I
-               LEquals -> Just . B
-               And     -> Just . B
-               Or      -> Just . B
-               Tup     -> const Nothing
-               Cons    -> const Nothing
-               Ap      -> const Nothing
-               Div     -> const Nothing
-               Mod     -> const Nothing
+-- op2_ :: Op2 a b c -> a -> b -> Maybe (Op0 c)
+-- op2_ o x y = modder (op2 o x y)
+--   where
+--     modder = case o of
+--                Plus    -> Just . I
+--                Times   -> Just . I
+--                Minus   -> Just . I
+--                LEquals -> Just . B
+--                And     -> Just . B
+--                Or      -> Just . B
+--                Tup     -> const Nothing
+--                Cons    -> const Nothing
+--                Ap      -> const Nothing
+--                Div     -> const Nothing
+--                Mod     -> const Nothing
 
-op3 :: Op3 a b c d -> a -> b -> c -> d
-op3 If       = \b x y -> if b then x else y
-op3 Case     = \e l r -> either l r e
-op3 UnfoldrN = \n f z -> take n $ unfoldr (Just . f) z
-op3 Foldr    = foldr
-
-lengthHList :: HList vs -> Int
-lengthHList HNil = 0
-lengthHList (_ :< xs) = 1 + lengthHList xs
+-- lengthHList :: HList vs -> Int
+-- lengthHList HNil = 0
+-- lengthHList (_ :< xs) = 1 + lengthHList xs
 
