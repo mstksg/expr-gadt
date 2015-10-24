@@ -59,11 +59,24 @@ data Expr :: [*] -> * -> * where
     Lambda   :: Expr (a ': vs) b -> Expr vs (a -> b)
 
 data ExprP :: [*] -> * -> * where
-    VP       :: ExprP vs (EType a) -> Indexor vs a -> ExprP vs a
+    VP       :: Indexor vs a -> ExprP vs a
     TP       :: EType a -> ExprP vs (EType a)
     -- StarP    :: ExprP vs (EType (EType a))
     OP       :: Op ts as a -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
-    LambdaP  :: ExprP (a ': vs) b -> ExprP vs (a -> b)
+    LambdaP  :: ExprP vs (EType a) -> ExprP (a ': vs) b -> ExprP vs (a -> b)
+
+testNil :: ExprP vs (EType a -> [a])
+testNil = LambdaP (TP EStar) (OP Nil (only (VP IZ)) Ø)
+
+testId :: ExprP vs (EType a -> a -> a)
+testId = LambdaP (TP EStar) (LambdaP (VP IZ) (VP IZ))
+
+testConst :: ExprP vs (EType a -> EType b -> a -> b -> a)
+testConst = LambdaP (TP EStar)
+          $ LambdaP (TP EStar)
+          $ LambdaP (VP (IS IZ))
+          $ LambdaP (VP (IS IZ))
+          $ VP (IS IZ)
 
 type Maybe' = Either ()
 

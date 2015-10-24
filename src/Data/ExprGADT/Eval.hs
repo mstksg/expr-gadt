@@ -6,12 +6,14 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Data.ExprGADT.Eval where
 
 import Data.ExprGADT.Traversals
 import Data.Functor.Identity
 import Data.Type.Product
+import Data.Bifunctor
 import Type.Class.HFunctor
 import Data.Type.HList
 import Data.ExprGADT.Types
@@ -19,7 +21,7 @@ import Data.List (unfoldr)
 
 forbidden :: Expr vs a -> String -> b
 -- forbidden e r = error $ "Impossible branch prevented by type system! " ++ show e ++ " " ++ r
-forbidden e r = error $ "Impossible branch prevented by type system! " ++ r
+forbidden _ r = error $ "Impossible branch prevented by type system! " ++ r
 
 eval :: Expr '[] a -> a
 eval = evalWith Ø
@@ -54,31 +56,43 @@ evalWith' f = go
 subIndexor :: HList ks -> (forall v. Indexor ks v -> v)
 subIndexor (x :< _ ) IZ      = runIdentity x
 subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
--- subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
+subIndexor Ø      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
 
+-- maybe can do the same trick with Either to get rid of EStar?
 evalWithP :: forall vs a. HList vs -> ExprP vs a -> a
 evalWithP vs = go
   where
     go :: forall b. ExprP vs b -> b
     go e = case e of
-             VP _ ix -> subIndexor vs ix
-             TP t -> t
-             OP o _ es -> op o $ map' (Identity . go) es
-             LambdaP ef -> \x -> evalWithP (x :<- vs) ef
+             VP ix        -> subIndexor vs ix
+             TP t         -> t
+             OP o _ es    -> op o $ map' (Identity . go) es
+             LambdaP _ eλ -> \x -> evalWithP (x :<- vs) eλ
 
-fromExprP :: ToExpr a => ExprP vs a -> Expr vs a
-fromExprP = go
+fromExprP :: forall vs r a. (forall b. EType b -> r) -> ExprP vs a -> Either r (Expr vs a)
+fromExprP f = go
   where
-    go :: forall us b. ExprP us b -> Expr us b
+    go :: forall us b. ExprP us b -> Either r (Expr us b)
     go e = case e of
-             VP _ ix    -> V ix
-             -- TP t       -> f t
-             TP t       -> undefined
-             -- OP Ap (TP EStar :< _) (ef :< _) -> _ ef
-             OP o _ es  -> O o (map' go es)
-             LambdaP ef -> Lambda (go ef)
+             VP ix    -> Right (V ix)
+             TP t     -> Left (f t)
+             OP Ap (TP EStar :< _) (LambdaP (TP EStar) eλ :> et) -> go $ subIxorsP (g et) eλ
+             OP o _ es  -> O o <$> traverse' go es
+             LambdaP _ eλ -> Lambda <$> go eλ
+      where
+        g :: forall c d.
+             ExprP us (EType c)
+          -> Indexor (EType c ': us) d
+          -> ExprP us d
+        g t IZ = t
+        g _ (IS ix) = VP ix
 
+-- type family DeLambda f where
+--     DeLambda (EType a -> b) = b 
+--     DeLambda a = a
 
+-- applyEType :: (forall a. Expr vs (EType a -> b)) -> EType b
+-- applyEType = undefined
 
 -- reduceAll :: Expr vs a -> Expr vs a
 -- reduceAll e | e == e'   = e'
@@ -238,10 +252,13 @@ op o xs = case o of
   where
     overHL1 :: forall a b. (a -> b) -> HList '[a] -> b
     overHL1 f (x :<- Ø) = f x
+    overHL1 _ _ = error "impossible"
     overHL2 :: forall a b c. (a -> b -> c) -> HList '[a, b] -> c
     overHL2 f (x :<- (y :<- Ø)) = f x y
+    overHL2 _ _ = error "impossible"
     overHL3 :: forall a b c d. (a -> b -> c -> d) -> HList '[a, b, c] -> d
     overHL3 f (x :<- (y :<- (z :<- Ø))) = f x y z
+    overHL3 _ _ = error "impossible"
 
 -- op1_ :: Op1 a b -> a -> Maybe (Op0 b)
 -- op1_ o = modder . op1 o

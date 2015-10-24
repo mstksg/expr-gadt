@@ -105,6 +105,71 @@ traverseIxors f = go
     f' IZ      = pure IZ
     f' (IS ix) = IS <$> f ix
 
+overIxorsP :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> ExprP ks a -> ExprP js a
+overIxorsP = overRN traverseIxorsP
+
+traverseIxorsP :: forall ks js a f. Applicative f
+               => (forall k. Indexor ks k -> f (Indexor js k))
+               -> ExprP ks a
+               -> f (ExprP js a)
+traverseIxorsP f = go
+  where
+    go :: forall b. ExprP ks b -> f (ExprP js b)
+    go e = case e of
+             VP ix         -> VP <$> f ix
+             TP t          -> pure (TP t)
+             OP o ts es    -> OP o <$> traverse' go ts <*> traverse' go es
+             LambdaP et eλ -> LambdaP <$> go et <*> traverseIxorsP f' eλ
+    f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
+    f' IZ      = pure IZ
+    f' (IS ix) = IS <$> f ix
+
+
+subIxors :: forall vs us a.
+            (forall b. Indexor vs b -> Expr us b)
+          -> Expr vs a
+          -> Expr us a
+subIxors = overRN subIxorsA
+
+subIxorsA :: forall vs us f a. Applicative f
+          => (forall b. Indexor vs b -> f (Expr us b))
+          -> Expr vs a
+          -> f (Expr us a)
+subIxorsA f = go
+  where
+    go :: forall b. Expr vs b -> f (Expr us b)
+    go e = case e of
+             V ix      -> f ix
+             O o es    -> O o <$> traverse' go es
+             Lambda eλ -> Lambda <$> subIxorsA f' eλ
+    f' :: forall b c. Indexor (c ': vs) b -> f (Expr (c ': us) b)
+    f' IZ      = pure $ V IZ
+    f' (IS ix) = subIxors (V . IS) <$> f ix
+
+subIxorsP :: forall vs us a.
+             (forall b. Indexor vs b -> ExprP us b)
+           -> ExprP vs a
+           -> ExprP us a
+subIxorsP = overRN subIxorsAP
+
+subIxorsAP :: forall vs us f a. Applicative f
+           => (forall b. Indexor vs b -> f (ExprP us b))
+           -> ExprP vs a
+           -> f (ExprP us a)
+subIxorsAP f = go
+  where
+    go :: forall b. ExprP vs b -> f (ExprP us b)
+    go e = case e of
+             VP ix         -> f ix
+             TP t          -> pure (TP t)
+             OP o ts es    -> OP o <$> traverse' go ts <*> traverse' go es
+             LambdaP et eλ -> LambdaP <$> go et <*> subIxorsAP f' eλ
+    f' :: forall b c. Indexor (c ': vs) b -> f (ExprP (c ': us) b)
+    f' IZ      = pure $ VP IZ
+    f' (IS ix) = subIxorsP (VP . IS) <$> f ix
+
+
+
 traverseExprPostM :: forall vs a m. Monad m
                   => (forall b us. Expr us b -> m (Expr us b))
                   -> Expr vs a
