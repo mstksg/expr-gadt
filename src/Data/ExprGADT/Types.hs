@@ -12,14 +12,14 @@
 
 module Data.ExprGADT.Types where
 
--- import Data.Proxy
 -- import Control.Applicative
-import Data.Type.Product
--- import Data.Type.Combinator
-import Type.Family.List as L
--- import Data.Monoid
 -- import Data.IsTy
+-- import Data.Monoid
 -- import Data.Proof.EQ
+import Data.Proxy
+-- import Data.Type.Combinator
+import Data.Type.Product
+import Type.Family.List        as L
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
@@ -30,7 +30,7 @@ type ExprList vs = Prod (Expr vs)
 
 type ExprPList vs = Prod (ExprP vs)
 type ExprPET vs a = ExprP vs (EType a)
-type ExprPETList vs ts = ExprPList vs (EType L.<$> ts)
+type ExprPETList vs ts = Prod (ExprP vs) (EType L.<$> ts)
 
 -- type family ExprET vs a where
 --     ExprET vs a = Expr vs (EType a)
@@ -59,11 +59,11 @@ data Expr :: [*] -> * -> * where
     Lambda   :: Expr (a ': vs) b -> Expr vs (a -> b)
 
 data ExprP :: [*] -> * -> * where
-    VP       :: Indexor vs a -> ExprP vs a
-    TP       :: EType a      -> ExprP vs (EType a)
-    EStar    :: ExprP vs (EType a)
-    OP       :: Op ts as a   -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
-    LambdaP  :: ExprPET vs a  -> ExprPET vs b -> ExprP (a ': vs) b -> ExprP vs (a -> b)
+    VP       :: ExprP vs (EType a) -> Indexor vs a -> ExprP vs a
+    TP       :: EType a -> ExprP vs (EType a)
+    -- StarP    :: ExprP vs (EType (EType a))
+    OP       :: Op ts as a -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
+    LambdaP  :: ExprP (a ': vs) b -> ExprP vs (a -> b)
 
 type Maybe' = Either ()
 
@@ -111,6 +111,76 @@ data EType :: * -> * where
   ETup    :: EType a -> EType b -> EType (a, b)
   EFunc   :: EType a -> EType b -> EType (a -> b)
   EList   :: EType a -> EType [a]
+  -- ???? is this a bad ideaaaa
+  EStar   :: EType (EType a)
+
+class HasEType a where
+    eType :: p a -> EType a
+
+instance HasEType () where
+    eType _ = EUnit
+
+instance HasEType Int where
+    eType _ = EInt
+
+instance HasEType Bool where
+    eType _ = EBool
+
+instance HasEType a => HasEType [a] where
+    eType _ = EList (eType (Proxy :: Proxy a))
+
+instance (HasEType a, HasEType b) => HasEType (a, b) where
+    eType _ = ETup (eType (Proxy :: Proxy a)) (eType (Proxy :: Proxy b))
+
+instance (HasEType a, HasEType b) => HasEType (Either a b) where
+    eType _ = EEither (eType (Proxy :: Proxy a)) (eType (Proxy :: Proxy b))
+
+instance (HasEType a, HasEType b) => HasEType (a -> b) where
+    eType _ = EFunc (eType (Proxy :: Proxy a)) (eType (Proxy :: Proxy b))
+
+class HasEType a => ToExpr a where
+    toExpr  :: a -> Expr vs a
+    toExprP :: a -> ExprP vs a
+
+instance ToExpr Int where
+    toExpr = o0 . I
+    toExprP i = OP (I i) Ø Ø
+
+instance ToExpr Bool where
+    toExpr = o0 . B
+    toExprP b = OP (B b) Ø Ø
+
+instance ToExpr () where
+    toExpr _ = o0 Unit
+    toExprP _ = OP Unit Ø Ø
+
+instance ToExpr a => ToExpr [a] where
+    toExpr []     = o0 Nil
+    toExpr (x:xs) = o2 Cons (toExpr x) (toExpr xs)
+    toExprP xs = case xs of
+                   []   -> OP Nil t Ø
+                   y:ys -> OP Cons t (toExprP y :< toExprP ys :< Ø)
+      where
+        t = only . TP $ eType (Proxy :: Proxy a)
+
+instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
+    toExpr (x, y) = o2 Tup (toExpr x) (toExpr y)
+    toExprP (x, y) = OP Tup ts (toExprP x :< toExprP y :< Ø)
+      where
+        ts = TP t1 :< TP t2 :< Ø
+        t1 = eType (Proxy :: Proxy a)
+        t2 = eType (Proxy :: Proxy b)
+
+instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
+    toExpr (Left x)  = o1 Left' (toExpr x)
+    toExpr (Right x) = o1 Right' (toExpr x)
+    toExprP e = case e of
+                  Left x  -> OP Left' ts (only $ toExprP x)
+                  Right x -> OP Right' ts (only $ toExprP x)
+      where
+        ts = TP t1 :< TP t2 :< Ø
+        t1 = eType (Proxy :: Proxy a)
+        t2 = eType (Proxy :: Proxy b)
 
 -- data ETList :: [*] -> * where
     -- ENil :: ETList '[]
@@ -138,7 +208,7 @@ data EType :: * -> * where
 -- deriving instance Show (Op1 a b)
 -- deriving instance Show (Op2 a b c)
 -- deriving instance Show (Op3 a b c d)
--- deriving instance Show (EType a)
+deriving instance Show (EType a)
 -- deriving instance Show (ETList a)
 -- -- deriving instance Show (ExprIxW a)
 -- -- deriving instance Show ExprW'
@@ -157,52 +227,6 @@ impossible :: String -> a
 impossible [] = error "Impossible branch prevented by type system"
 impossible str = error $ "Impossible branch prevented by type system: " ++ str
 
--- class ToExpr a where
-    -- toExpr :: a -> Expr vs a
-
--- instance ToExpr Int where
-    -- toExpr = O0 . I
-
--- instance ToExpr Bool where
-    -- toExpr = O0 . B
-
--- instance ToExpr () where
-    -- toExpr _ = O0 Unit
-
--- instance ToExpr a => ToExpr [a] where
-    -- toExpr []     = O0 Nil
-    -- toExpr (x:xs) = O2 Cons (toExpr x) (toExpr xs)
-
--- instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
-    -- toExpr (x, y) = O2 Tup (toExpr x) (toExpr y)
-
--- instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
-    -- toExpr (Left x)  = O1 Left' (toExpr x)
-    -- toExpr (Right x) = O1 Right' (toExpr x)
-
--- class MakeEType a where
-    -- makeEType :: p a -> EType a
-
--- instance MakeEType () where
-    -- makeEType _ = EUnit
-
--- instance MakeEType Int where
-    -- makeEType _ = EInt
-
--- instance MakeEType Bool where
-    -- makeEType _ = EBool
-
--- instance MakeEType a => MakeEType [a] where
-    -- makeEType _ = EList (makeEType (Proxy :: Proxy a))
-
--- instance (MakeEType a, MakeEType b) => MakeEType (a, b) where
-    -- makeEType _ = ETup (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
-
--- instance (MakeEType a, MakeEType b) => MakeEType (Either a b) where
-    -- makeEType _ = EEither (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
-
--- instance (MakeEType a, MakeEType b) => MakeEType (a -> b) where
-    -- makeEType _ = EFunc (makeEType (Proxy :: Proxy a)) (makeEType (Proxy :: Proxy b))
 
 -- instance Num (Expr vs Int) where
     -- (+)         = O2 Plus
@@ -425,6 +449,12 @@ o2 o = curry'2 (O o)
 o3 :: Op3 ts a b c d -> Expr vs a -> Expr vs b -> Expr vs c -> Expr vs d
 o3 o = curry'3 (O o)
 
+-- type family CurryProd f ts r where
+--   CurryProd f '[]       r = r
+--   CurryProd f (t ': ts) r = f t -> CurryProd f ts r
+
+-- curryProd :: (Prod f ts -> r) -> CurryProd f ts r
+-- curryProd f x = undefined
 
 infixl 1 ~$
 

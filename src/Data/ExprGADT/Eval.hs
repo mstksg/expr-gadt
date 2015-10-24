@@ -24,6 +24,10 @@ forbidden e r = error $ "Impossible branch prevented by type system! " ++ r
 eval :: Expr '[] a -> a
 eval = evalWith Ø
 
+-- evalP :: ExprP '[] a -> a
+-- evalP = evalWithP Ø
+
+
 evalWith :: forall vs a. HList vs -> Expr vs a -> a
 evalWith vs = go
   where
@@ -51,6 +55,30 @@ subIndexor :: HList ks -> (forall v. Indexor ks v -> v)
 subIndexor (x :< _ ) IZ      = runIdentity x
 subIndexor (_ :< xs) (IS ix) = subIndexor xs ix
 -- subIndexor HNil      _       = error "Impossible...should be prevented by the type system. There is no Indexor '[] a."
+
+evalWithP :: forall vs a. HList vs -> ExprP vs a -> a
+evalWithP vs = go
+  where
+    go :: forall b. ExprP vs b -> b
+    go e = case e of
+             VP _ ix -> subIndexor vs ix
+             TP t -> t
+             OP o _ es -> op o $ map' (Identity . go) es
+             LambdaP ef -> \x -> evalWithP (x :<- vs) ef
+
+fromExprP :: ToExpr a => ExprP vs a -> Expr vs a
+fromExprP = go
+  where
+    go :: forall us b. ExprP us b -> Expr us b
+    go e = case e of
+             VP _ ix    -> V ix
+             -- TP t       -> f t
+             TP t       -> undefined
+             -- OP Ap (TP EStar :< _) (ef :< _) -> _ ef
+             OP o _ es  -> O o (map' go es)
+             LambdaP ef -> Lambda (go ef)
+
+
 
 -- reduceAll :: Expr vs a -> Expr vs a
 -- reduceAll e | e == e'   = e'
