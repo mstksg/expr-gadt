@@ -9,6 +9,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module Data.ExprGADT.Types where
 
@@ -78,7 +79,32 @@ testConst = LambdaP (TP EStar)
           $ LambdaP (VP (IS IZ))
           $ VP (IS IZ)
 
+-- testComp :: ExprP vs (EType (b -> c) -> EType (a -> b) -> EType a -> (b -> c) -> (a -> b) -> a -> c)
+-- testComp = LambdaP (TP EStar)
+--          $ LambdaP (TP EStar)
+--          $ LambdaP (TP EStar)
+--          $ LambdaP (VP (IS (IS IZ)))
+--          $ LambdaP (VP (IS (IS IZ)))
+--          $ LambdaP (VP (IS (IS IZ)))
+--          -- $ O2p Ap undefined (V (IS (IS IZ))) (O2p Ap undefined (V (IS IZ)) (V IZ))
+--          $ O2p Ap undefined (V (IS (IS IZ))) undefined
+
+testComp' :: Expr vs ((b -> c) -> (a -> b) -> a -> c)
+testComp' = Lambda
+          $ Lambda
+          $ Lambda
+          $ O2 Ap (V (IS (IS IZ))) (O2 Ap (V (IS IZ)) (V IZ))
+
 type Maybe' = Either ()
+
+data TOp :: [*] -> * -> * where
+    TOInt    :: TOp '[] Int
+    TOBool   :: TOp '[] Bool
+    TOUnit   :: TOp '[] ()
+    TOList   :: TOp '[a] [a]
+    TOEither :: TOp '[a, b] (Either a b)
+    TOTup    :: TOp '[a, b] (a, b)
+    TOFunc   :: TOp '[a, b] (a -> b)
 
 data Op :: [*] -> [*] -> * -> * where
     I        :: Int  -> Op '[]  '[] Int
@@ -156,20 +182,20 @@ class HasEType a => ToExpr a where
     toExprP :: a -> ExprP vs a
 
 instance ToExpr Int where
-    toExpr = o0 . I
+    toExpr = O0 . I
     toExprP i = OP (I i) Ø Ø
 
 instance ToExpr Bool where
-    toExpr = o0 . B
+    toExpr = O0 . B
     toExprP b = OP (B b) Ø Ø
 
 instance ToExpr () where
-    toExpr _ = o0 Unit
+    toExpr _ = O0 Unit
     toExprP _ = OP Unit Ø Ø
 
 instance ToExpr a => ToExpr [a] where
-    toExpr []     = o0 Nil
-    toExpr (x:xs) = o2 Cons (toExpr x) (toExpr xs)
+    toExpr []     = O0 Nil
+    toExpr (x:xs) = O2 Cons (toExpr x) (toExpr xs)
     toExprP xs = case xs of
                    []   -> OP Nil t Ø
                    y:ys -> OP Cons t (toExprP y :< toExprP ys :< Ø)
@@ -177,7 +203,7 @@ instance ToExpr a => ToExpr [a] where
         t = only . TP $ eType (Proxy :: Proxy a)
 
 instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
-    toExpr (x, y) = o2 Tup (toExpr x) (toExpr y)
+    toExpr (x, y) = O2 Tup (toExpr x) (toExpr y)
     toExprP (x, y) = OP Tup ts (toExprP x :< toExprP y :< Ø)
       where
         ts = TP t1 :< TP t2 :< Ø
@@ -185,8 +211,8 @@ instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
         t2 = eType (Proxy :: Proxy b)
 
 instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
-    toExpr (Left x)  = o1 Left' (toExpr x)
-    toExpr (Right x) = o1 Right' (toExpr x)
+    toExpr (Left x)  = O1 Left' (toExpr x)
+    toExpr (Right x) = O1 Right' (toExpr x)
     toExprP e = case e of
                   Left x  -> OP Left' ts (only $ toExprP x)
                   Right x -> OP Right' ts (only $ toExprP x)
@@ -252,10 +278,10 @@ impossible str = error $ "Impossible branch prevented by type system: " ++ str
 -- exprEq :: Expr vs a -> Expr us b -> Bool
 -- exprEq (V IZ) (V IZ)                           = True
 -- exprEq (V (IS ix1)) (V (IS ix2))               = exprEq (V ix1) (V ix2)
--- exprEq (O0 o1) (O0 o2)                         = op0Eq o1 o2
--- exprEq (O1 o1 e1) (O1 o2 e2)                   = op1Eq o1 o2 && exprEq e1 e2
--- exprEq (O2 o1 e1 e1') (O2 o2 e2 e2')           = op2Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2'
--- exprEq (O3 o1 e1 e1' e1'') (O3 o2 e2 e2' e2'') = op3Eq o1 o2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
+-- exprEq (O0 O1) (O0 O2)                         = op0Eq O1 O2
+-- exprEq (O1 O1 e1) (O1 O2 e2)                   = op1Eq O1 O2 && exprEq e1 e2
+-- exprEq (O2 O1 e1 e1') (O2 O2 e2 e2')           = op2Eq O1 O2 && exprEq e1 e2 && exprEq e1' e2'
+-- exprEq (O3 O1 e1 e1' e1'') (O3 O2 e2 e2' e2'') = op3Eq O1 O2 && exprEq e1 e2 && exprEq e1' e2' && exprEq e1'' e2''
 -- exprEq (Lambda f1) (Lambda f2)                 = exprEq f1 f2
 -- exprEq _ _                                     = False
 
@@ -450,17 +476,30 @@ uncurry'3 f (x :< y :< z :< Ø) = f x y z
 -- curryProd3 :: (Prod f '[a,b,c] -> c) -> f a -> f b -> c
 -- curryProd3 f x y = f (x :< y :< Ø)
 
-o0 :: Op0 ts a -> Expr vs a
-o0 = flip O Ø
+pattern O0 :: Op0 ts a -> Expr vs a
+pattern O0 o = O o Ø
 
-o1 :: Op1 ts a b -> Expr vs a -> Expr vs b
-o1 o = curry'1 (O o)
+pattern O1 :: Op1 ts a b -> Expr vs a -> Expr vs b
+pattern O1 o e1 = O o (e1 :< Ø)
 
-o2 :: Op2 ts a b c -> Expr vs a -> Expr vs b -> Expr vs c
-o2 o = curry'2 (O o)
+pattern O2 :: Op2 ts a b c -> Expr vs a -> Expr vs b -> Expr vs c
+pattern O2 o e1 e2 = O o (e1 :< e2 :< Ø)
 
-o3 :: Op3 ts a b c d -> Expr vs a -> Expr vs b -> Expr vs c -> Expr vs d
-o3 o = curry'3 (O o)
+pattern O3 :: Op3 ts a b c d -> Expr vs a -> Expr vs b -> Expr vs c -> Expr vs d
+pattern O3 o e1 e2 e3 = O o (e1 :< e2 :< e3 :< Ø)
+
+pattern O0p :: Op0 ts a -> ExprPETList vs ts -> ExprP vs a
+pattern O0p o ts = OP o ts Ø
+
+pattern O1p :: Op1 ts a b -> ExprPETList vs ts -> ExprP vs a -> ExprP vs b
+pattern O1p o ts e1 = OP o ts (e1 :< Ø)
+
+pattern O2p :: Op2 ts a b c -> ExprPETList vs ts -> ExprP vs a -> ExprP vs b -> ExprP vs c
+pattern O2p o ts e1 e2 = OP o ts (e1 :< e2 :< Ø)
+
+pattern O3p :: Op3 ts a b c d -> ExprPETList vs ts -> ExprP vs a -> ExprP vs b -> ExprP vs c -> ExprP vs d
+pattern O3p o ts e1 e2 e3 = OP o ts (e1 :< e2 :< e3 :< Ø)
+
 
 -- type family CurryProd f ts r where
 --   CurryProd f '[]       r = r
@@ -472,25 +511,25 @@ o3 o = curry'3 (O o)
 infixl 1 ~$
 
 (~$) :: Expr vs (a -> b) -> Expr vs a -> Expr vs b
-(~$) = o2 Ap
+(~$) = O2 Ap
 
 foldr' :: Expr vs (a -> b -> b) -> Expr vs b -> Expr vs [a] -> Expr vs b
-foldr' = o3 Foldr
+foldr' = O3 Foldr
 
 case' :: Expr vs (Either a b) -> Expr vs (a -> c) -> Expr vs (b -> c) -> Expr vs c
-case' = o3 Case
+case' = O3 Case
 
 unfoldrN' :: Expr vs Int -> Expr vs (a -> (b, a)) -> Expr vs a -> Expr vs [b]
-unfoldrN' = o3 UnfoldrN
+unfoldrN' = O3 UnfoldrN
 
 if' :: Expr vs Bool -> Expr vs a -> Expr vs a -> Expr vs a
-if' = o3 If
+if' = O3 If
 
 right' :: Expr vs b -> Expr vs (Either a b)
-right' = o1 Right'
+right' = O1 Right'
 
 left' :: Expr vs a -> Expr vs (Either a b)
-left' = o1 Left'
+left' = O1 Left'
 
 just' :: Expr vs b -> Expr vs (Maybe' b)
 just' = right'
@@ -499,25 +538,25 @@ nothing' :: Expr vs (Maybe' b)
 nothing' = left' unit'
 
 tup' :: Expr vs a -> Expr vs b -> Expr vs (a, b)
-tup' = o2 Tup
+tup' = O2 Tup
 
 fst' :: Expr vs (a, b) -> Expr vs a
-fst' = o1 Fst
+fst' = O1 Fst
 
 snd' :: Expr vs (a, b) -> Expr vs b
-snd' = o1 Snd
+snd' = O1 Snd
 
 infixr 3 ~&&
 (~&&) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
-(~&&) = o2 And
+(~&&) = O2 And
 
 infixr 2 ~||
 (~||) :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
-(~||) = o2 Or
+(~||) = O2 Or
 
 infix 4 ~<=
 (~<=) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
-(~<=) = o2 LEquals
+(~<=) = O2 LEquals
 
 infix 4 ~==
 (~==) :: Expr vs Int -> Expr vs Int -> Expr vs Bool
@@ -536,40 +575,40 @@ infix 4 ~>=
 e1 ~>= e2 = e2 ~<= e1
 
 not' :: Expr vs Bool -> Expr vs Bool
-not' = o1 Not
+not' = O1 Not
 
 xor' :: Expr vs Bool -> Expr vs Bool -> Expr vs Bool
 xor' e1 e2 = (e1 ~|| e2) ~&& not' (e1 ~&& e2)
 
 infixl 7 `mod'`
 mod' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-mod' = o2 Mod
+mod' = O2 Mod
 
 infixl 7 `div'`
 div' :: Expr vs Int -> Expr vs Int -> Expr vs (Maybe' Int)
-div' = o2 Div
+div' = O2 Div
 
 infixr 5 ~:
 (~:) :: Expr vs a -> Expr vs [a] -> Expr vs [a]
-(~:) = o2 Cons
+(~:) = O2 Cons
 
 unit' :: Expr vs ()
-unit' = o0 Unit
+unit' = O0 Unit
 
 nil' :: Expr vs [a]
-nil' = o0 Nil
+nil' = O0 Nil
 
 false' :: Expr vs Bool
-false' = o0 (B False)
+false' = O0 (B False)
 
 true' :: Expr vs Bool
-true' = o0 (B True)
+true' = O0 (B True)
 
 iI :: Int -> Expr vs Int
-iI = o0 . I
+iI = O0 . I
 
 bB :: Bool -> Expr vs Bool
-bB = o0 . B
+bB = O0 . B
 
 λ :: Expr (a ': vs) b -> Expr vs (a -> b)
 λ = Lambda

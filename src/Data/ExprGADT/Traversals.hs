@@ -30,7 +30,7 @@ traverseIntLeaves f = traverseExprO0 f'
   where
     f' :: forall ts b. Op0 ts b -> f (Expr vs b)
     f' (I i) = f i
-    f' o     = pure $ o0 o
+    f' o     = pure $ O0 o
 
 traverseBoolLeaves :: forall vs a f. Applicative f
                    => (Bool -> f (Expr vs Bool))
@@ -40,7 +40,7 @@ traverseBoolLeaves f = traverseExprO0 f'
   where
     f' :: forall ts b. Op0 ts b -> f (Expr vs b)
     f' (B b) = f b
-    f' o     = pure $ o0 o
+    f' o     = pure $ O0 o
 
 traverseUnitLeaves :: forall vs a f. Applicative f
                    => f (Expr vs ())
@@ -50,7 +50,7 @@ traverseUnitLeaves f = traverseExprO0 f'
   where
     f' :: forall ts b. Op0 ts b -> f (Expr vs b)
     f' Unit = f
-    f' o    = pure $ o0 o
+    f' o    = pure $ O0 o
 
 -- find a way to traverse explicitly non-leaves?  or maybe all O2's...or
 -- O2's only if they don't contain any more O2's ?  O2's all the way down?

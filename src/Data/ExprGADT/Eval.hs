@@ -13,6 +13,7 @@ module Data.ExprGADT.Eval where
 import Data.ExprGADT.Traversals
 import Data.Functor.Identity
 import Data.Type.Product
+import Type.Family.List        as L
 import Data.Bifunctor
 import Type.Class.HFunctor
 import Data.Type.HList
@@ -87,9 +88,143 @@ fromExprP f = go
         g t IZ = t
         g _ (IS ix) = VP ix
 
--- type family DeLambda f where
---     DeLambda (EType a -> b) = b 
---     DeLambda a = a
+fromExprP' :: forall vs r a. (forall b. EType b -> r) -> ExprP vs a -> Either r (Expr (DeLambdaList vs) (DeLambda a))
+fromExprP' f = go
+  where
+    go :: forall us b. ExprP us b -> Either r (Expr (DeLambdaList us) (DeLambda b))
+    go e = case e of
+             VP ix -> Right (V (deLambdaIx ix))
+             TP t  -> Left (f t)
+             O0p o _ -> case o of
+                          I i  -> Right $ O0 (I i)
+                          B b  -> Right $ O0 (B b)
+                          Unit -> Right $ O0 Unit
+                          Nil  -> Right $ O0 Nil
+             O1p o _ e1 -> case o of
+                             Abs    -> O1 Abs <$> go e1
+                             Signum -> O1 Signum <$> go e1
+                             Not    -> O1 Not <$> go e1
+                             Left'  -> O1 Left' <$> go e1
+                             Right' -> O1 Right' <$> go e1
+                             Fst    -> O1 Fst <$> go e1
+                             Snd    -> O1 Snd <$> go e1
+             O2p o ts e1 e2 -> case o of
+                                 Plus -> O2 Plus <$> go e1 <*> go e2
+                                 Times -> O2 Times <$> go e1 <*> go e2
+                                 Minus -> O2 Minus <$> go e1 <*> go e2
+                                 LEquals -> O2 LEquals <$> go e1 <*> go e2
+                                 And -> O2 And <$> go e1 <*> go e2
+                                 Or -> O2 Or <$> go e1 <*> go e2
+                                 Tup -> O2 Tup <$> go e1 <*> go e2
+                                 Cons -> O2 Cons <$> go e1 <*> go e2
+                                 Ap -> case (ts, e1, e2) of
+                                         -- so can apply
+                                         (TP EStar :< _, LambdaP (TP EStar) eλ, et) -> go $ subIxorsP (g et) eλ
+                                         (_, LambdaP et eλ, _)  -> O2 Ap <$> (Lambda <$> go eλ) <*> go e2
+                                         -- problem here ... wants to turn
+                                         -- ExprP (a -> b) into Expr
+                                         -- (DeLambda a -> DeLambda b), but
+                                         -- really should be turning it
+                                         -- into DeLambda (a -> b)
+                                         -- (_, _, _) -> O2 Ap <$> (_ e1) <*> go e2
+                                         -- (TP EStar :< _, VP ix, et) -> Right $ V (deLambdaIx ix)
+                                         -- (TP EStar :< _, VP ix, _) -> O2 Ap _ <$> go e2
+                                         -- (_, TP _, _)  -> undefined
+                                         (TP EInt :> TP EInt, _, _) -> O2 Ap <$> go e1 <*> go e2
+                                         -- (TP EInt :< _, _, _) -> do
+                                         --   O2 Ap e1' e2' <- O2 Ap <$> go e1 <*> go e2
+                                         --   return $ O2 Ap (_ e1') e2'
+                                 Div -> O2 Div <$> go e1 <*> go e2
+                                 Mod -> O2 Mod <$> go e1 <*> go e2
+             O3p o ts e1 e2 e3 -> case o of
+                                    If -> O3 If <$> go e1 <*> go e2 <*> go e3
+                                -- Case -> O3 If (go e1) (go e2) (go e3)
+                                -- UnfoldrN -> O3 UnfoldrN (go e1) (go e2) (go e3)
+                                -- Foldr -> O3 Foldr (go e1) (go e2) (go e3)
+      where
+        g :: forall c d.
+             ExprP us (EType c)
+          -> Indexor (EType c ': us) d
+          -> ExprP us d
+        g t IZ = t
+        g _ (IS ix) = VP ix
+
+--                        Unit -> O0 Unit
+--                        Nil  -> O0 Nil
+             -- OP o _ es -> O o <$> traverse' go es
+    -- go e = case e of
+    --          VP ix    -> Right (V ix)
+    --          TP t     -> Left (f t)
+    --          OP Ap (TP EStar :< _) (LambdaP (TP EStar) eλ :> et) -> go $ subIxorsP (g et) eλ
+    --          OP o _ es  -> O o <$> traverse' go es
+    --          LambdaP _ eλ -> Lambda <$> go eλ
+    --   where
+    --     g :: forall c d.
+    --          ExprP us (EType c)
+    --       -> Indexor (EType c ': us) d
+    --       -> ExprP us d
+    --     g t IZ = t
+    --     g _ (IS ix) = VP ix
+
+
+type family DeLambda (f :: *) :: * where
+    DeLambda (EType a -> b) = b
+    DeLambda (Either a b)   = Either (DeLambda a) (DeLambda b)
+    DeLambda (a, b)         = (DeLambda a, DeLambda b)
+    DeLambda [a]            = [DeLambda a]
+    DeLambda a              = a
+
+type family DeLambdaList (xs :: [*]) :: [*] where
+    DeLambdaList '[]       = '[]
+    DeLambdaList (a ': as) = DeLambda a ': DeLambdaList as
+
+-- deLambda :: Expr vs a -> Expr (DeLambdaList vs) (DeLambda a)
+-- deLambda = go
+--   where
+--     go :: forall us b. Expr us b -> Expr (DeLambdaList us) (DeLambda b)
+--     go e = case e of
+--              V ix   -> V (deLambdaIx ix)
+--              O0 o -> case o of
+--                        I i  -> O0 (I i)
+--                        B b  -> O0 (B b)
+--                        Unit -> O0 Unit
+--                        Nil  -> O0 Nil
+--              O1 o e1 -> case o of
+--                           Abs    -> O1 Abs (go e1)
+--                           Signum -> O1 Signum (go e1)
+--                           Not    -> O1 Not (go e1)
+--                           Left'  -> O1 Left' (go e1)
+--                           Right' -> O1 Right' (go e1)
+--                           Fst    -> O1 Fst (go e1)
+--                           Snd    -> O1 Snd (go e1)
+--              O2 o e1 e2 -> case o of
+--                              Plus -> O2 Plus (go e1) (go e2)
+--                              Times -> O2 Times (go e1) (go e2)
+--                              Minus -> O2 Minus (go e1) (go e2)
+--                              LEquals -> O2 LEquals (go e1) (go e2)
+--                              And -> O2 And (go e1) (go e2)
+--                              Or -> O2 Or (go e1) (go e2)
+--                              Tup -> O2 Tup (go e1) (go e2)
+--                              Cons -> O2 Cons (go e1) (go e2)
+--                              -- Ap -> O2 Ap (go e1) (go e2)
+--                              Ap -> case (e1, e2) of
+--                                      (Lambda eλ, et) -> undefined
+--                                      -- problem here. we can only plug in
+--                                      -- polies if we know it's an EType,
+--                                      -- but we don't know it's an EType
+--                                      -- from this.
+--                              Div -> O2 Div (go e1) (go e2)
+--                              Mod -> O2 Mod (go e1) (go e2)
+--              O3 o e1 e2 e3 -> case o of
+--                                 If -> O3 If (go e1) (go e2) (go e3)
+--                                 -- Case -> O3 If (go e1) (go e2) (go e3)
+--                                 -- UnfoldrN -> O3 UnfoldrN (go e1) (go e2) (go e3)
+--                                 -- Foldr -> O3 Foldr (go e1) (go e2) (go e3)
+--              -- Lambda eλ -> Lambda (go eλ)
+
+deLambdaIx :: Indexor vs a -> Indexor (DeLambdaList vs) (DeLambda a)
+deLambdaIx IZ      = IZ
+deLambdaIx (IS ix) = IS (deLambdaIx ix)
 
 -- applyEType :: (forall a. Expr vs (EType a -> b)) -> EType b
 -- applyEType = undefined
