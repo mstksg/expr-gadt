@@ -9,6 +9,8 @@ module Data.ExprGADT.Traversals where
 
 import Data.ExprGADT.Types
 import Data.Type.Product
+import Data.Type.Combinator hiding (I)
+import qualified Data.Type.Combinator as C (I)
 import Data.Monoid
 import Type.Class.HFunctor
 import Data.Functor.Identity
@@ -117,8 +119,8 @@ traverseIxorsP f = go
     go :: forall b. ExprP ks b -> f (ExprP js b)
     go e = case e of
              VP ix         -> VP <$> f ix
-             TP t          -> pure (TP t)
-             OP o ts es    -> OP o <$> traverse' go ts <*> traverse' go es
+             TP o ts       -> TP o <$> traverse' (overComp go) ts
+             OP o ts es    -> OP o <$> traverse' (overComp go) ts <*> traverse' go es
              LambdaP et eλ -> LambdaP <$> go et <*> traverseIxorsP f' eλ
     f' :: forall b c. Indexor (c ': ks) b -> f (Indexor (c ': js) b)
     f' IZ      = pure IZ
@@ -146,6 +148,11 @@ subIxorsA f = go
     f' IZ      = pure $ V IZ
     f' (IS ix) = subIxors (V . IS) <$> f ix
 
+subIZ :: Expr vs a -> Expr (a ': vs) b -> Expr vs b
+subIZ e = subIxors $ \ix -> case ix of
+                              IZ -> e
+                              IS ix' -> V ix'
+
 subIxorsP :: forall vs us a.
              (forall b. Indexor vs b -> ExprP us b)
            -> ExprP vs a
@@ -161,13 +168,21 @@ subIxorsAP f = go
     go :: forall b. ExprP vs b -> f (ExprP us b)
     go e = case e of
              VP ix         -> f ix
-             TP t          -> pure (TP t)
-             OP o ts es    -> OP o <$> traverse' go ts <*> traverse' go es
+             TP o ts       -> TP o <$> traverse' (overComp go) ts
+             OP o ts es    -> OP o <$> traverse' (overComp go) ts <*> traverse' go es
              LambdaP et eλ -> LambdaP <$> go et <*> subIxorsAP f' eλ
     f' :: forall b c. Indexor (c ': vs) b -> f (ExprP (c ': us) b)
     f' IZ      = pure $ VP IZ
     f' (IS ix) = subIxorsP (VP . IS) <$> f ix
 
+subIZP :: ExprP vs a -> ExprP (a ': vs) b -> ExprP vs b
+subIZP e = subIxorsP $ \ix -> case ix of
+                                IZ -> e
+                                IS ix' -> VP ix'
+
+
+overComp :: Functor f => (s (t a) -> f (s' (t' b))) -> (s :.: t) a -> f ((s' :.: t') b)
+overComp f = fmap Comp . f . getComp
 
 
 traverseExprPostM :: forall vs a m. Monad m

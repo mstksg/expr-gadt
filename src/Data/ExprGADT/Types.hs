@@ -18,9 +18,13 @@ module Data.ExprGADT.Types where
 -- import Data.Monoid
 -- import Data.Proof.EQ
 import Data.Proxy
--- import Data.Type.Combinator
+import Data.Type.Combinator hiding (I)
+import qualified Data.Type.Combinator as C (I)
+import Data.Type.Fin
 import Data.Type.Product
-import Type.Family.List        as L
+import Data.Type.Vector
+import Type.Family.List       as L
+import Type.Family.Nat
 
 data Indexor :: [k] -> k -> * where
     IZ :: Indexor (k ': ks) k
@@ -31,7 +35,7 @@ type ExprList vs = Prod (Expr vs)
 
 type ExprPList vs = Prod (ExprP vs)
 type ExprPET vs a = ExprP vs (EType a)
-type ExprPETList vs ts = Prod (ExprP vs) (EType L.<$> ts)
+type ExprPETList vs ts = Prod (ExprP vs :.: EType) ts
 
 -- type family ExprET vs a where
 --     ExprET vs a = Expr vs (EType a)
@@ -61,33 +65,75 @@ data Expr :: [*] -> * -> * where
 
 data ExprP :: [*] -> * -> * where
     VP       :: Indexor vs a -> ExprP vs a
-    TP       :: EType a -> ExprP vs (EType a)
-    -- StarP    :: ExprP vs (EType (EType a))
+    TP       :: TOp as a -> ExprPETList vs as -> ExprP vs (EType a)
     OP       :: Op ts as a -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
     LambdaP  :: ExprP vs (EType a) -> ExprP (a ': vs) b -> ExprP vs (a -> b)
 
+data ExprTy :: N -> * where
+    VTy :: Fin n -> ExprTy n
+    TTy :: TOp as a -> V (LengthList as) (ExprTy n) -> ExprTy n
+    Forall :: ExprTy (S n) -> ExprTy n
+    -- ApTy :: ExprTy (S n) -> ExprTy n -> ExprTy n
+
+    -- TT :: TOp as a -> Prod (ExprT vs) (EType L.<$> as) -> ExprT vs a
+    -- -- this doesn't make any sense?
+    -- LambdaT :: ExprT as a -> ExprT (EType a ': as) b -> ExprT vs (a -> b)
+
+type family LengthList (as :: [k]) :: N where
+    LengthList '[] = Z
+    LengthList (a ': as) = S (LengthList as)
+
+-- data ExprT :: [*] -> * -> * where
+--     VT :: Indexor vs (EType a) -> ExprT vs a
+--     TT :: TOp as a -> Prod (ExprT vs) (EType L.<$> as) -> ExprT vs a
+--     -- this doesn't make any sense?
+--     LambdaT :: ExprT as a -> ExprT (EType a ': as) b -> ExprT vs (a -> b)
+
 testNil :: ExprP vs (EType a -> [a])
-testNil = LambdaP (TP EStar) (OP Nil (only (VP IZ)) Ø)
+testNil = LambdaP (TP TOStar Ø) (OP Nil (only (Comp $ VP i1)) Ø)
 
 testId :: ExprP vs (EType a -> a -> a)
-testId = LambdaP (TP EStar) (LambdaP (VP IZ) (VP IZ))
+testId = LambdaP (TP TOStar Ø) (LambdaP (VP i1) (VP i1))
 
 testConst :: ExprP vs (EType a -> EType b -> a -> b -> a)
-testConst = LambdaP (TP EStar)
-          $ LambdaP (TP EStar)
-          $ LambdaP (VP (IS IZ))
-          $ LambdaP (VP (IS IZ))
-          $ VP (IS IZ)
+testConst = LambdaP (TP TOStar Ø)
+          $ LambdaP (TP TOStar Ø)
+          $ LambdaP (VP i2)
+          $ LambdaP (VP i2)
+          $ VP i2
 
--- testComp :: ExprP vs (EType (b -> c) -> EType (a -> b) -> EType a -> (b -> c) -> (a -> b) -> a -> c)
--- testComp = LambdaP (TP EStar)
---          $ LambdaP (TP EStar)
---          $ LambdaP (TP EStar)
---          $ LambdaP (VP (IS (IS IZ)))
---          $ LambdaP (VP (IS (IS IZ)))
---          $ LambdaP (VP (IS (IS IZ)))
---          -- $ O2p Ap undefined (V (IS (IS IZ))) (O2p Ap undefined (V (IS IZ)) (V IZ))
---          $ O2p Ap undefined (V (IS (IS IZ))) undefined
+testComp :: ExprP vs (EType a -> EType b -> EType c -> (b -> c) -> (a -> b) -> a -> c)
+testComp = LambdaP (TP TOStar Ø)
+         $ LambdaP (TP TOStar Ø)
+         $ LambdaP (TP TOStar Ø)
+         $ LambdaP (TP TOFunc (Comp (VP i2) :> Comp (VP i1)))
+         $ LambdaP (TP TOFunc (Comp (VP i4) :> Comp (VP i3)))
+         $ LambdaP (VP i5)
+         $ O2p Ap (Comp (VP i5) :> Comp (VP i4)) (VP i3)
+         $ O2p Ap (Comp (VP i6) :> Comp (VP i5)) (VP i2) (VP i1)
+
+i1 :: Indexor (j ': js) j
+i1 = IZ
+
+i2 :: Indexor (j ': k ': ks) k
+i2 = IS i1
+
+i3 :: Indexor (j ': k ': l ': ls) l
+i3 = IS i2
+
+i4 :: Indexor (j ': k ': l ': m ': ms) m
+i4 = IS i3
+
+i5 :: Indexor (j ': k ': l ': m ': n ': ns) n
+i5 = IS i4
+
+i6 :: Indexor (j ': k ': l ': m ': n ': o ': os) o
+i6 = IS i5
+
+i7 :: Indexor (j ': k ': l ': m ': n ': o ': p ': ps) p
+i7 = IS i6
+
+
 
 testComp' :: Expr vs ((b -> c) -> (a -> b) -> a -> c)
 testComp' = Lambda
@@ -98,6 +144,7 @@ testComp' = Lambda
 type Maybe' = Either ()
 
 data TOp :: [*] -> * -> * where
+    TOStar   :: TOp '[] (EType a)
     TOInt    :: TOp '[] Int
     TOBool   :: TOp '[] Bool
     TOUnit   :: TOp '[] ()
@@ -153,6 +200,21 @@ data EType :: * -> * where
   -- ???? is this a bad ideaaaa
   EStar   :: EType (EType a)
 
+fromEType :: EType a -> ExprP vs (EType a)
+fromEType EInt = TP TOInt Ø
+fromEType EBool = TP TOBool Ø
+fromEType EUnit = TP TOUnit Ø
+fromEType (EList a) = TP TOList (only (fromEType' a))
+fromEType (EEither a b) = TP TOEither (fromEType' a :> fromEType' b)
+fromEType (ETup a b) = TP TOTup (fromEType' a :> fromEType' b)
+fromEType (EFunc a b) = TP TOFunc (fromEType' a :> fromEType' b)
+
+fromEType' :: EType a -> (ExprP vs :.: EType) a
+fromEType' = Comp . fromEType
+
+eType' :: HasEType a => p a -> ExprP vs (EType a)
+eType' = fromEType . eType
+
 class HasEType a where
     eType :: p a -> EType a
 
@@ -200,15 +262,15 @@ instance ToExpr a => ToExpr [a] where
                    []   -> OP Nil t Ø
                    y:ys -> OP Cons t (toExprP y :< toExprP ys :< Ø)
       where
-        t = only . TP $ eType (Proxy :: Proxy a)
+        t = only . fromEType' $ eType (Proxy :: Proxy a)
 
 instance (ToExpr a, ToExpr b) => ToExpr (a, b) where
     toExpr (x, y) = O2 Tup (toExpr x) (toExpr y)
     toExprP (x, y) = OP Tup ts (toExprP x :< toExprP y :< Ø)
       where
-        ts = TP t1 :< TP t2 :< Ø
-        t1 = eType (Proxy :: Proxy a)
-        t2 = eType (Proxy :: Proxy b)
+        ts = Comp t1 :< Comp t2 :< Ø
+        t1 = eType' (Proxy :: Proxy a)
+        t2 = eType' (Proxy :: Proxy b)
 
 instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
     toExpr (Left x)  = O1 Left' (toExpr x)
@@ -217,9 +279,9 @@ instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
                   Left x  -> OP Left' ts (only $ toExprP x)
                   Right x -> OP Right' ts (only $ toExprP x)
       where
-        ts = TP t1 :< TP t2 :< Ø
-        t1 = eType (Proxy :: Proxy a)
-        t2 = eType (Proxy :: Proxy b)
+        ts = Comp t1 :< Comp t2 :< Ø
+        t1 = eType' (Proxy :: Proxy a)
+        t2 = eType' (Proxy :: Proxy b)
 
 -- data ETList :: [*] -> * where
     -- ENil :: ETList '[]
@@ -239,8 +301,8 @@ instance (ToExpr a, ToExpr b) => ToExpr (Either a b) where
 -- data ExprWIx :: [*] -> * where
     -- EWI :: EType a -> Expr vs a -> ExprWIx vs
 
--- data ETypeW :: * where
-    -- ETW :: EType a -> ETypeW
+data ETypeW :: * where
+    ETW :: EType a -> ETypeW
 
 -- deriving instance Show (Indexor ks k)
 -- deriving instance Show (Op0 a)
@@ -261,6 +323,9 @@ deriving instance Show (EType a)
 -- deriving instance Eq (Op3 a b c d)
 -- -- deriving instance Eq (EType a)
 -- -- deriving instance Eq ExprW'
+
+deriving instance Show (ExprTy n)
+deriving instance Show (TOp as a)
 
 impossible :: String -> a
 impossible [] = error "Impossible branch prevented by type system"
