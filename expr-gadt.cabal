@@ -17,6 +17,7 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 library
+  exposed-modules:     
   -- exposed-modules:     -- Data.ExprGADT.Expr
                        -- Data.ExprGADT.Dumb
                        -- Data.ExprGADT.Dumb.Infer
@@ -26,26 +27,26 @@ library
                        -- Data.ExprGADT.Parse
                        -- Data.ExprGADT.Pretty
                        -- Data.ExprGADT.Traversals
-  exposed-modules:     Data.ExprGADT.Types
-                       Data.Type.HList
-                       Data.ExprGADT.Traversals
-                       Data.ExprGADT.Eval
-                       Data.ExprGADT.Samples
-                       Data.ExprGADT.Dumb.Types
+  -- exposed-modules:     Data.ExprGADT.Types
+  --                      Data.Type.HList
+  --                      Data.ExprGADT.Traversals
+  --                      Data.ExprGADT.Eval
+  --                      Data.ExprGADT.Samples
+  --                      Data.ExprGADT.Dumb.Types
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.8 && <4.9
-                     , MonadRandom
-                     , profunctors
-                     , trifecta
-                     , containers
-                     , mtl
-                     , parsers
-                     , data-fix
-                     , ghc-typelits-natnormalise
-                     , singletons
-                     , ty
-                     , type-combinators
+  build-depends:       base >=4.8 && <5
+                     -- , MonadRandom
+                     -- , profunctors
+                     -- , trifecta
+                     -- , containers
+                     -- , mtl
+                     -- , parsers
+                     -- , data-fix
+                     -- , ghc-typelits-natnormalise
+                     -- , singletons
+                     -- , ty
+                     -- , type-combinators
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
