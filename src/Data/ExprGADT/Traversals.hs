@@ -10,6 +10,8 @@ module Data.ExprGADT.Traversals where
 import Data.ExprGADT.Types
 import Data.Type.Product
 import Data.Type.Combinator hiding (I)
+import Data.Type.Fin
+import Type.Family.Nat
 import qualified Data.Type.Combinator as C (I)
 import Data.Monoid
 import Type.Class.HFunctor
@@ -89,7 +91,7 @@ traverseExprO0 f = go
              O o es        -> O o <$> traverse' go es
              Lambda ef     -> Lambda <$> traverseExprO0 (fmap (overIxors IS) . f) ef
 
-overIxors :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
+overIxors :: (forall k. Indexor ks k -> Indexor js k) -> Expr ks a -> Expr js a
 overIxors = overRN traverseIxors
 
 traverseIxors :: forall ks js a f. Applicative f
@@ -107,7 +109,7 @@ traverseIxors f = go
     f' IZ      = pure IZ
     f' (IS ix) = IS <$> f ix
 
-overIxorsP :: forall ks js a. (forall k. Indexor ks k -> Indexor js k) -> ExprP ks a -> ExprP js a
+overIxorsP :: (forall k. Indexor ks k -> Indexor js k) -> ExprP ks a -> ExprP js a
 overIxorsP = overRN traverseIxorsP
 
 traverseIxorsP :: forall ks js a f. Applicative f
@@ -126,9 +128,26 @@ traverseIxorsP f = go
     f' IZ      = pure IZ
     f' (IS ix) = IS <$> f ix
 
+overIxorsTy :: (Fin n -> Fin m) -> ExprTy n -> ExprTy m
+overIxorsTy = over' traverseIxorsTy
 
-subIxors :: forall vs us a.
-            (forall b. Indexor vs b -> Expr us b)
+traverseIxorsTy :: forall n m f. Applicative f
+                => (Fin n -> f (Fin m))
+                -> ExprTy n
+                -> f (ExprTy m)
+traverseIxorsTy f = go
+  where
+    go :: ExprTy n -> f (ExprTy m)
+    go e = case e of
+             VTy ix -> VTy <$> f ix
+             TTy o ts -> TTy o <$> traverse go ts
+             Forall t -> Forall <$> traverseIxorsTy f' t
+    f' :: Fin ('S n) -> f (Fin ('S m))
+    f' FZ      = pure FZ
+    f' (FS ix) = FS <$> f ix
+
+
+subIxors :: (forall b. Indexor vs b -> Expr us b)
           -> Expr vs a
           -> Expr us a
 subIxors = overRN subIxorsA
@@ -153,8 +172,7 @@ subIZ e = subIxors $ \ix -> case ix of
                               IZ -> e
                               IS ix' -> V ix'
 
-subIxorsP :: forall vs us a.
-             (forall b. Indexor vs b -> ExprP us b)
+subIxorsP :: (forall b. Indexor vs b -> ExprP us b)
            -> ExprP vs a
            -> ExprP us a
 subIxorsP = overRN subIxorsAP
@@ -179,6 +197,21 @@ subIZP :: ExprP vs a -> ExprP (a ': vs) b -> ExprP vs b
 subIZP e = subIxorsP $ \ix -> case ix of
                                 IZ -> e
                                 IS ix' -> VP ix'
+
+subIxorsTy :: (Fin n -> ExprTy m) -> ExprTy n -> ExprTy m
+subIxorsTy = over' subIxorsATy
+
+subIxorsATy :: forall n m f. Applicative f => (Fin n -> f (ExprTy m)) -> ExprTy n -> f (ExprTy m)
+subIxorsATy f = go
+  where
+    go :: ExprTy n -> f (ExprTy m)
+    go e = case e of
+             VTy ix -> f ix
+             TTy o ts -> TTy o <$> traverse go ts
+             Forall t -> Forall <$> subIxorsATy f' t
+    f' :: Fin ('S n) -> f (ExprTy ('S m))
+    f' FZ = pure (VTy FZ)
+    f' (FS ix) = subIxorsTy (VTy . FS) <$> f ix
 
 
 overComp :: Functor f => (s (t a) -> f (s' (t' b))) -> (s :.: t) a -> f ((s' :.: t') b)

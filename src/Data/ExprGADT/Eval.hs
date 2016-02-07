@@ -14,6 +14,7 @@ import Control.Applicative
 import Data.Bifunctor
 import Data.ExprGADT.Traversals
 import Data.ExprGADT.Types
+import Data.Type.Quantifier
 import Data.Functor.Identity
 import Data.List                   (unfoldr)
 import Data.Type.Combinator hiding (I)
@@ -236,86 +237,160 @@ type family DeLambdaList (xs :: [*]) :: [*] where
 -- omg...does this actually work?
 -- have to work on removing redundant lambas, but....this might actually be
 -- it? :O :O :O
-toExprT :: ExprP vs a -> Maybe (ExprTy (LengthList vs))
-toExprT e = case e of
+--
+-- hm, maybe should be two levels: it is definitely a Type, or, it is
+-- polymorphic enough to be a type if necessary.  this would be in opToT.
+toExprTy :: ExprP vs a -> Maybe (ExprTy (LengthList vs))
+toExprTy e = case e of
               VP ix -> Just $ VTy (ixFin ix)
-              TP o ts -> TTy o . pToVec <$> traverse' (fmap Const . toExprT . getComp) ts
+              TP o ts -> TTy o . pToVec <$> traverse' (fmap Const . toExprTy . getComp) ts
               -- okay we're at a crossroads here.  the result can't depend
               -- on any values...so ignore es.  only look at ts?
               OP o ts _ -> opToT o ts
-              LambdaP _ eλ -> Forall <$> toExprT eλ
-              -- LambdaP et eλ -> do
-              --   et' <- toExprT et
-              --   undefined
-                -- _
+              LambdaP _ eλ -> Forall <$> toExprTy eλ
 
+-- elimForall :: ExprTy ('S n) -> Maybe (ExprTy n)
+-- elimForall = traverseIxorsTy $ \ix -> case ix of
+--                                         FZ     -> Nothing
+--                                         FS ix' -> Just ix'
 
--- such unsafe!!!  nothing is compiler verified!
--- wait noooo this is all wrong...is supposed to return the type if it
--- contains a type!!!!!! aaahhhh!!!
-opToT' :: Op ts as a -> ExprPETList vs ts -> Maybe (ExprTy (LengthList vs))
-opToT' o ts =
-    case o of
-      I _ -> Just (TTy TOInt ØV)
-      B _ -> Just (TTy TOBool ØV)
-      Nil -> case ts of
-               Comp t :< Ø -> TTy TOList . pure <$> toExprT t
-               _ -> impossible ""
-      Unit -> Just (TTy TOUnit ØV)
+elimForall :: forall n. ExprTy n -> Maybe (ExprTy n)
+elimForall = elimForallWith $ \ix -> case ix of
+                                       FZ -> Nothing
+                                       FS ix' -> Just ix'
 
-      Abs -> Just (TTy TOInt ØV)
-      Signum -> Just (TTy TOInt ØV)
-      Not -> Just (TTy TOBool ØV)
-      Left' -> case ts of
-                 Comp t1 :< Comp t2 :< Ø -> do
-                   t1' <- toExprT t1
-                   t2' <- toExprT t2
-                   return $ TTy TOEither (t1' :+ t2' :+ ØV)
-                 _ -> impossible ""
-      Right' -> case ts of
-                 Comp t1 :< Comp t2 :< Ø -> do
-                   t1' <- toExprT t1
-                   t2' <- toExprT t2
-                   return $ TTy TOEither (t1' :+ t2' :+ ØV)
-                 _ -> impossible ""
-      Fst -> case ts of
-               Comp t :< _ :< Ø -> toExprT t
-               _ -> impossible ""
-      Snd -> case ts of
-               _ :< Comp t :< Ø -> toExprT t
-               _ -> impossible ""
-      Plus -> Just (TTy TOInt ØV)
-      Times -> Just (TTy TOInt ØV)
-      Minus -> Just (TTy TOInt ØV)
-      LEquals -> Just (TTy TOBool ØV)
-      And -> Just (TTy TOBool ØV)
-      Or -> Just (TTy TOBool ØV)
-      Tup -> case ts of
-               Comp t1 :< Comp t2 :< Ø -> do
-                 t1' <- toExprT t1
-                 t2' <- toExprT t2
-                 return $ TTy TOTup (t1' :+ t2' :+ ØV)
-               _ -> impossible ""
-      Cons -> case ts of
-                Comp t :< Ø -> TTy TOList . pure <$> toExprT t
-                _ -> impossible ""
-      Ap -> case ts of
-              _ :< Comp t :< Ø -> toExprT t
-              _ -> impossible ""
-      Div -> Just (TTy TOEither (TTy TOUnit ØV :+ TTy TOInt ØV :+ ØV))
-      Mod -> Just (TTy TOEither (TTy TOUnit ØV :+ TTy TOInt ØV :+ ØV))
-      If -> case ts of
-              Comp t :< Ø -> toExprT t
-              _ -> impossible ""
-      Case -> case ts of
-                _ :< _ :< Comp t :< Ø -> toExprT t
-                _ -> impossible ""
-      UnfoldrN -> case ts of
-                    _ :< Comp t :< Ø -> TTy TOList . pure <$> toExprT t
-                    _ -> impossible ""
-      Foldr -> case ts of
-                 _ :< Comp t :< Ø -> toExprT t
-                 _ -> impossible ""
+elimForallWith :: forall n. (forall m. Fin ('S m) -> Maybe (Fin m))
+               -> ExprTy n
+               -> Maybe (ExprTy n)
+elimForallWith f = go
+  where
+    go e = case e of
+             Forall t -> (do
+               t' <- traverseIxorsTy f t
+               -- problem: next level is fail, so returns itself.  doesn't
+               -- ever go down to next levels.
+               elimForallWith f t' <|> Just t')
+             -- Forall t -> case traverseIxorsTy f t of
+             --               Just t' -> case elimForallWith f t' of
+             --                            Nothing -> 
+             --               Nothing -> Just e
+               -- t' <- traverseIxorsTy f t
+               -- elimForallWith f t' <|> Just t'
+               -- t' <- elimForallWith f' t
+               -- t' <- traverseIxorsTy f t
+               -- elimForallWith f t' <|> Just t'
+               -- t' <- elimForallWith f' t
+               -- traverseIxorsTy f t'
+             _ -> Just e
+    f' :: forall m. Fin ('S ('S m)) -> Maybe (Fin ('S m))
+    f' FZ = Just FZ
+    f' (FS ix) = FS <$> f ix
+
+-- -- figure out a way to do reduce \x -> \y -> x to \x -> x
+-- elimForall :: forall n. ExprTy n -> Maybe (ExprTy n)
+-- elimForall e = case e of
+--                  Forall t -> do
+--                    t' <- traverseIxorsTy f' t
+--                    elimForall t' <|> Just t'
+--                  -- Forall t -> (do
+--                  --   t' <- (traverseIxorsTy f' =<< elimForall t)
+--                  --   elimForall t' <|> Just t'
+--                  --   ) <|> Just e
+--                    -- undefined
+--                  -- Forall t -> (traverseIxorsTy f' =<< elimForall t)
+--                  --         <|> Just e
+--                  _ -> Just e
+--   where
+--     f' :: Fin ('S n) -> Maybe (Fin n)
+--     f' FZ = Nothing
+--     f' (FS ix) = Just ix
+--     f'' :: Fin ('S ('S n)) -> Maybe (Fin ('S n))
+--     f'' = deeper f'
+--     deeper :: (Fin ('S n) -> Maybe (Fin n)) -> Fin ('S ('S n)) -> Maybe (Fin ('S n))
+--     deeper _ FZ = Just FZ
+--     deeper f (FS ix) = FS <$> f ix
+
+    -- case e of
+    --   VTy FZ      -> Nothing
+    --   VTy (FS ix) -> Just (VTy ix)
+    --   TTy o ts -> TTy o <$> traverse elimForall ts
+    --   Forall t -> Forall <$> subIxorsATy f t
+  -- where
+    -- f :: Int
+    -- f = undefined
+
+-- reduceExprTy :: ExprTy n -> Some ExprTy
+-- reduceExprTy e =
+--     case e of
+--       VTy ix -> Some (VTy ix)
+--       TTy o ts -> 
+--     -- TTy :: TOp as a -> V (LengthList as) (ExprTy n) -> ExprTy n
+
+-- -- such unsafe!!!  nothing is compiler verified!
+-- -- wait noooo this is all wrong...is supposed to return the type if it
+-- -- contains a type!!!!!! aaahhhh!!!
+-- opToT' :: Op ts as a -> ExprPETList vs ts -> Maybe (ExprTy (LengthList vs))
+-- opToT' o ts =
+--     case o of
+--       I _ -> Just (TTy TOInt ØV)
+--       B _ -> Just (TTy TOBool ØV)
+--       Nil -> case ts of
+--                Comp t :< Ø -> TTy TOList . pure <$> toExprTy t
+--                _ -> impossible ""
+--       Unit -> Just (TTy TOUnit ØV)
+--       Abs -> Just (TTy TOInt ØV)
+--       Signum -> Just (TTy TOInt ØV)
+--       Not -> Just (TTy TOBool ØV)
+--       Left' -> case ts of
+--                  Comp t1 :< Comp t2 :< Ø -> do
+--                    t1' <- toExprTy t1
+--                    t2' <- toExprTy t2
+--                    return $ TTy TOEither (t1' :+ t2' :+ ØV)
+--                  _ -> impossible ""
+--       Right' -> case ts of
+--                  Comp t1 :< Comp t2 :< Ø -> do
+--                    t1' <- toExprTy t1
+--                    t2' <- toExprTy t2
+--                    return $ TTy TOEither (t1' :+ t2' :+ ØV)
+--                  _ -> impossible ""
+--       Fst -> case ts of
+--                Comp t :< _ :< Ø -> toExprTy t
+--                _ -> impossible ""
+--       Snd -> case ts of
+--                _ :< Comp t :< Ø -> toExprTy t
+--                _ -> impossible ""
+--       Plus -> Just (TTy TOInt ØV)
+--       Times -> Just (TTy TOInt ØV)
+--       Minus -> Just (TTy TOInt ØV)
+--       LEquals -> Just (TTy TOBool ØV)
+--       And -> Just (TTy TOBool ØV)
+--       Or -> Just (TTy TOBool ØV)
+--       Tup -> case ts of
+--                Comp t1 :< Comp t2 :< Ø -> do
+--                  t1' <- toExprTy t1
+--                  t2' <- toExprTy t2
+--                  return $ TTy TOTup (t1' :+ t2' :+ ØV)
+--                _ -> impossible ""
+--       Cons -> case ts of
+--                 Comp t :< Ø -> TTy TOList . pure <$> toExprTy t
+--                 _ -> impossible ""
+--       Ap -> case ts of
+--               _ :< Comp t :< Ø -> toExprTy t
+--               _ -> impossible ""
+--       Div -> Just (TTy TOEither (TTy TOUnit ØV :+ TTy TOInt ØV :+ ØV))
+--       Mod -> Just (TTy TOEither (TTy TOUnit ØV :+ TTy TOInt ØV :+ ØV))
+--       If -> case ts of
+--               Comp t :< Ø -> toExprTy t
+--               _ -> impossible ""
+--       Case -> case ts of
+--                 _ :< _ :< Comp t :< Ø -> toExprTy t
+--                 _ -> impossible ""
+--       UnfoldrN -> case ts of
+--                     _ :< Comp t :< Ø -> TTy TOList . pure <$> toExprTy t
+--                     _ -> impossible ""
+--       Foldr -> case ts of
+--                  _ :< Comp t :< Ø -> toExprTy t
+--                  _ -> impossible ""
                
 opToT :: Op ts as a -> ExprPETList vs ts -> Maybe (ExprTy (LengthList vs))
 opToT o ts =
@@ -331,10 +406,10 @@ opToT o ts =
       Left' -> Nothing -- nonsense?  Either (EType a) b ?
       Right' -> Nothing
       Fst -> case ts of
-               Comp t :< _ :< Ø -> TTy TOTup . pure <$> toExprT t
+               Comp t :< _ :< Ø -> TTy TOTup . pure <$> toExprTy t
                _ -> impossible ""
       Snd -> case ts of
-               _ :< Comp t :< Ø -> TTy TOTup . pure <$> toExprT t
+               _ :< Comp t :< Ø -> TTy TOTup . pure <$> toExprTy t
                _ -> impossible ""
       Plus -> Nothing
       Times -> Nothing
@@ -345,19 +420,19 @@ opToT o ts =
       Tup -> Nothing
       Cons -> Nothing -- right?
       Ap -> case ts of
-              _ :< Comp t :< Ø -> toExprT t
+              _ :< Comp t :< Ø -> toExprTy t
               _ -> impossible ""
       Div -> Nothing
       Mod -> Nothing
       If -> case ts of
-              Comp t :< Ø -> toExprT t
+              Comp t :< Ø -> toExprTy t
               _ -> impossible ""
       Case -> case ts of
-                _ :< _ :< Comp t :< Ø -> toExprT t
+                _ :< _ :< Comp t :< Ø -> toExprTy t
                 _ -> impossible ""
       UnfoldrN -> Nothing
       Foldr -> case ts of
-                 _ :< Comp t :< Ø -> toExprT t
+                 _ :< Comp t :< Ø -> toExprTy t
                  _ -> impossible ""
 
 -- op :: Op ts as a -> HList as -> a

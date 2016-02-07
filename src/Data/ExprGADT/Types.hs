@@ -63,12 +63,14 @@ data Expr :: [*] -> * -> * where
     O        :: Op ts as a       -> ExprList vs as -> Expr vs a
     Lambda   :: Expr (a ': vs) b -> Expr vs (a -> b)
 
+-- hm, this naively allows impredicative types.  oops?
 data ExprP :: [*] -> * -> * where
     VP       :: Indexor vs a -> ExprP vs a
     TP       :: TOp as a -> ExprPETList vs as -> ExprP vs (EType a)
     OP       :: Op ts as a -> ExprPETList vs ts -> ExprPList vs as -> ExprP vs a
     LambdaP  :: ExprP vs (EType a) -> ExprP (a ': vs) b -> ExprP vs (a -> b)
 
+-- hm, this naively allows impredicative types.  oops?
 data ExprTy :: N -> * where
     VTy :: Fin n -> ExprTy n
     TTy :: TOp as a -> V (LengthList as) (ExprTy n) -> ExprTy n
@@ -79,6 +81,8 @@ data ExprTy :: N -> * where
     -- -- this doesn't make any sense?
     -- LambdaT :: ExprT as a -> ExprT (EType a ': as) b -> ExprT vs (a -> b)
 
+-- data ExprTyN
+
 type family LengthList (as :: [k]) :: N where
     LengthList '[] = Z
     LengthList (a ': as) = S (LengthList as)
@@ -88,29 +92,6 @@ type family LengthList (as :: [k]) :: N where
 --     TT :: TOp as a -> Prod (ExprT vs) (EType L.<$> as) -> ExprT vs a
 --     -- this doesn't make any sense?
 --     LambdaT :: ExprT as a -> ExprT (EType a ': as) b -> ExprT vs (a -> b)
-
-testNil :: ExprP vs (EType a -> [a])
-testNil = LambdaP (TP TOStar Ø) (OP Nil (only (Comp $ VP i1)) Ø)
-
-testId :: ExprP vs (EType a -> a -> a)
-testId = LambdaP (TP TOStar Ø) (LambdaP (VP i1) (VP i1))
-
-testConst :: ExprP vs (EType a -> EType b -> a -> b -> a)
-testConst = LambdaP (TP TOStar Ø)
-          $ LambdaP (TP TOStar Ø)
-          $ LambdaP (VP i2)
-          $ LambdaP (VP i2)
-          $ VP i2
-
-testComp :: ExprP vs (EType a -> EType b -> EType c -> (b -> c) -> (a -> b) -> a -> c)
-testComp = LambdaP (TP TOStar Ø)
-         $ LambdaP (TP TOStar Ø)
-         $ LambdaP (TP TOStar Ø)
-         $ LambdaP (TP TOFunc (Comp (VP i2) :> Comp (VP i1)))
-         $ LambdaP (TP TOFunc (Comp (VP i4) :> Comp (VP i3)))
-         $ LambdaP (VP i5)
-         $ O2p Ap (Comp (VP i5) :> Comp (VP i4)) (VP i3)
-         $ O2p Ap (Comp (VP i6) :> Comp (VP i5)) (VP i2) (VP i1)
 
 i1 :: Indexor (j ': js) j
 i1 = IZ
@@ -134,12 +115,6 @@ i7 :: Indexor (j ': k ': l ': m ': n ': o ': p ': ps) p
 i7 = IS i6
 
 
-
-testComp' :: Expr vs ((b -> c) -> (a -> b) -> a -> c)
-testComp' = Lambda
-          $ Lambda
-          $ Lambda
-          $ O2 Ap (V (IS (IS IZ))) (O2 Ap (V (IS IZ)) (V IZ))
 
 type Maybe' = Either ()
 
@@ -325,6 +300,7 @@ deriving instance Show (EType a)
 -- -- deriving instance Eq ExprW'
 
 deriving instance Show (ExprTy n)
+deriving instance Show (Op ts as a)
 deriving instance Show (TOp as a)
 
 impossible :: String -> a

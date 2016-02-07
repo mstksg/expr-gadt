@@ -30,6 +30,8 @@ library
                        Data.Type.HList
                        Data.ExprGADT.Traversals
                        Data.ExprGADT.Eval
+                       Data.ExprGADT.Samples
+                       Data.ExprGADT.Dumb.Types
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.8 && <4.9
